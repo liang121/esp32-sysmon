@@ -1,0 +1,11 @@
+.DS_Store
+**/build/
+firmware-idf/managed_components/
+firmware-idf/sdkconfig
+firmware-idf/sdkconfig.old
+mac/sampler
+backup/
+*.bin
+*.elf
+*.map
+*.log

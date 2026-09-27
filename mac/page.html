@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mac 负载</title>
+<style>
+  body{margin:0;background:#0b0d10;color:#e6e6e6;font:15px -apple-system,system-ui,sans-serif;padding:14px}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .card{background:#15181d;border-radius:12px;padding:12px 14px;flex:1;min-width:140px}
+  .lbl{color:#8a8f98;font-size:12px}.big{font-size:34px;font-weight:600}
+  canvas{width:100%;height:120px;display:block;margin-top:6px}
+  table{width:100%;border-collapse:collapse}td{padding:4px 0}td.n{text-align:right;color:#aaa}
+  #mp{border-radius:12px;padding:10px 14px;font-weight:600;font-size:18px;margin-bottom:12px}
+  #stale{color:#e5484d;display:none;margin-bottom:8px}
+</style></head><body>
+<div id="stale">⚠︎ 数据超过 5 秒未更新</div>
+<div id="mp">内存压力：…</div>
+<div class="row">
+  <div class="card"><div class="lbl">CPU</div><div class="big" id="cpu">–</div><div class="lbl" id="load"></div></div>
+  <div class="card"><div class="lbl">内存</div><div class="big" id="mem">–</div><div class="lbl" id="swap"></div></div>
+</div>
+<div class="card" style="margin-top:12px"><div class="lbl">CPU（2 分钟）</div><canvas id="c1"></canvas></div>
+<div class="card" style="margin-top:12px"><div class="lbl">内存占用（2 分钟）</div><canvas id="c2"></canvas></div>
+<div class="card" style="margin-top:12px"><div class="lbl">占用最高</div><table id="top"></table></div>
+<script>
+const MP={1:['正常','#1f6f43'],2:['警告','#8a6d00'],4:['危急 · 该停手了','#a3262a']};
+function plot(id,data,color){
+  const c=document.getElementById(id),d=devicePixelRatio;c.width=c.clientWidth*d;c.height=c.clientHeight*d;
+  const g=c.getContext('2d'),w=c.width,h=c.height;g.clearRect(0,0,w,h);
+  g.strokeStyle='#2a2f37';g.lineWidth=1;for(const y of[.25,.5,.75]){g.beginPath();g.moveTo(0,h*y);g.lineTo(w,h*y);g.stroke();}
+  if(!data.length)return;const dx=w/119;g.beginPath();
+  data.forEach((v,i)=>{const x=w-(data.length-1-i)*dx,y=h-v/100*h;i?g.lineTo(x,y):g.moveTo(x,y)});
+  g.strokeStyle=color;g.lineWidth=2*d;g.stroke();g.lineTo(w,h);g.lineTo(w-(data.length-1)*dx,h);g.fillStyle=color+'33';g.fill();
+}
+async function tick(){
+  try{
+    const s=await (await fetch('/api/now',{cache:'no-store'})).json();
+    document.getElementById('stale').style.display=s.age>5000?'block':'none';
+    const [t,bg]=MP[s.mp]||['?','#333'];const mp=document.getElementById('mp');mp.textContent='内存压力：'+t;mp.style.background=bg;
+    cpu.textContent=s.cpu+'%';load.textContent='负载 '+s.load;
+    mem.textContent=s.mused+' / '+s.mtot+' GB';swap.textContent='swap '+s.swap+' GB · '+s.swapr+' MB/s';
+    plot('c1',s.hcpu,'#3b82f6');plot('c2',s.hmem,'#a855f7');
+    top.innerHTML=s.top.map(([n,c,r])=>`<tr><td>${n}</td><td class=n>${c}%</td><td class=n>${r} MB</td></tr>`).join('');
+  }catch(e){document.getElementById('stale').style.display='block'}
+}
+tick();setInterval(tick,1000);
+</script></body></html>
