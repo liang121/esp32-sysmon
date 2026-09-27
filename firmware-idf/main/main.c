@@ -27,29 +27,9 @@
 #include "driver/usb_serial_jtag_vfs.h"
 
 #include "rgb_lcd_port.h"
-#include "gui_paint.h"
+#include "ui.h"
 #include "gt911.h"
 #include "io_extension.h"
-
-#define W EXAMPLE_LCD_H_RES
-#define H EXAMPLE_LCD_V_RES
-#define GUTTER 40
-
-// RGB565 palette
-#define C_BG      0x0861
-#define C_PANEL   0x10C3
-#define C_GRID    0x2146
-#define C_TEXT    0xE73C
-#define C_DIM     0x8C71
-#define C_BLUE    0x3C1F
-#define C_BLUE_F  0x1149
-#define C_PURPLE  0xA2BE
-#define C_PURP_F  0x3009
-#define C_GREEN   0x1B88
-#define C_AMBER   0x8B60
-#define C_RED     0xA125
-#define C_GRAY    0x3186
-#define C_HOT     0xFB00
 
 static uint32_t millis(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
@@ -75,269 +55,14 @@ static void load_cfg(void) {
 }
 
 // ---------------- state ----------------
-typedef struct { char name[25]; int cpu, rss; } proc_t;
-typedef struct {
-  bool valid;
-  int cpu, mp, cores[16], ncores, ntop, nh;
-  float load, mused, mtot, swap, swapr, mdemand, mstored, mcomp;
-  proc_t top[5];
-  uint8_t hcpu[120]; uint16_t hsw[120];
-} stats_t;
 static stats_t st;
-
-// AI subscription usage (Claude Code / Codex): percent used and seconds until reset per window
-typedef struct { int h5, h5r, wk, wkr, age, busy; char plan[12], err[41]; } ai_t;
-static ai_t ai[2];  // 0 = Claude Code, 1 = Codex
-typedef enum { SCREEN_HOME, SCREEN_MONITOR } screen_t;
-static screen_t screen = SCREEN_HOME;
-static int page = 0;
-#define NPAGES 2
-#define HOME_X 16
-#define HOME_Y 8
-#define HOME_W 56
-#define HOME_H 44
-#define MONITOR_X 56
-#define MONITOR_Y 128
-#define MONITOR_W 196
-#define MONITOR_H 232
+static ai_t ai[2];  // Claude Code, Codex
 static uint32_t last_ok_ms = 0, conn_start_ms = 0;
 static char last_err[40] = "starting";
 static volatile bool wifi_up = false;
 static char my_ip[16] = "0.0.0.0", host_ip[16] = "";
 static const uint8_t BRIGHT[] = {0, 40, 75};  // PWM duty: 0 = full brightness (inverted)
 static int bright_idx = 0;
-
-// ---------------- drawing ----------------
-static uint16_t *bufs[2], *fb;
-static int draw_idx = 0;
-
-static inline void px(int x, int y, uint16_t c) { if (x >= 0 && x < W && y >= 0 && y < H) fb[y * W + x] = c; }
-static void fill_rect(int x, int y, int w, int h, uint16_t c) {
-  if (x < 0) { w += x; x = 0; }
-  if (y < 0) { h += y; y = 0; }
-  if (x + w > W) w = W - x;
-  if (y + h > H) h = H - y;
-  for (int j = 0; j < h; j++) { uint16_t *p = fb + (y + j) * W + x; for (int i = 0; i < w; i++) p[i] = c; }
-}
-static bool inside(int x, int y, int left, int top, int w, int h) {
-  return x >= left && x < left + w && y >= top && y < top + h;
-}
-static void vline(int x, int y0, int y1, uint16_t c) { if (y0 > y1) { int t = y0; y0 = y1; y1 = t; } for (int y = y0; y <= y1; y++) px(x, y, c); }
-static void line(int x0, int y0, int x1, int y1, uint16_t c) {
-  int dx = abs(x1 - x0), sx = x0 < x1 ? 1 : -1, dy = -abs(y1 - y0), sy = y0 < y1 ? 1 : -1, e = dx + dy;
-  for (;;) { px(x0, y0, c); px(x0, y0 + 1, c); if (x0 == x1 && y0 == y1) break; int e2 = 2 * e; if (e2 >= dy) { e += dy; x0 += sx; } if (e2 <= dx) { e += dx; y0 += sy; } }
-}
-// ASCII-only text, foreground pixels only (regions are filled before text is drawn on them)
-static void text(int x, int y, const char *s, sFONT *f, uint16_t fg) {
-  const int bpr = (f->Width + 7) / 8;
-  for (; *s; s++, x += f->Width) {
-    uint8_t c = (uint8_t)*s;
-    if (c < 32 || c > 126) c = '?';
-    if (x + f->Width > W) break;
-    const uint8_t *g = f->table + (c - 32) * f->Height * bpr;
-    for (int r = 0; r < f->Height; r++, g += bpr) {
-      int yy = y + r; if (yy < 0 || yy >= H) continue;
-      uint16_t *row = fb + yy * W + x;
-      for (int col = 0; col < f->Width; col++)
-        if (g[col >> 3] & (0x80 >> (col & 7))) row[col] = fg;
-    }
-  }
-}
-// area chart of 0..100 values, newest on the right, with y-axis labels in a left gutter
-static void chart(int x, int y, int w, int h, const uint8_t *v, int n, uint16_t stroke, uint16_t fill,
-                  const char *l_top, const char *l_mid, const char *l_bot) {
-  fill_rect(x, y, GUTTER, h, C_BG);
-  text(x + GUTTER - 6 - 7 * strlen(l_top), y, l_top, &Font12, C_DIM);
-  text(x + GUTTER - 6 - 7 * strlen(l_mid), y + h / 2 - 6, l_mid, &Font12, C_DIM);
-  text(x + GUTTER - 6 - 7 * strlen(l_bot), y + h - 12, l_bot, &Font12, C_DIM);
-  x += GUTTER; w -= GUTTER;
-  fill_rect(x, y, w, h, C_PANEL);
-  for (int k = 1; k < 4; k++) for (int i = x; i < x + w; i += 4) px(i, y + h * k / 4, C_GRID);
-  if (n < 2) return;
-  float dx = (float)(w - 1) / 119.0f;
-  int prev_x = -1, prev_y = 0;
-  for (int i = 0; i < n; i++) {
-    int xi = x + w - 1 - (int)((n - 1 - i) * dx);
-    int yi = y + h - 1 - (int)(v[i] * (h - 2) / 100);
-    if (prev_x >= 0) {
-      for (int xx = prev_x; xx <= xi; xx++) {
-        int span = xi - prev_x > 0 ? xi - prev_x : 1;
-        vline(xx, prev_y + (yi - prev_y) * (xx - prev_x) / span, y + h - 1, fill);
-      }
-      line(prev_x, prev_y, xi, yi, stroke);
-    }
-    prev_x = xi; prev_y = yi;
-  }
-}
-
-static void render_system(void);
-static void render_ai(void);
-
-static void render_home_icon(void) {
-  int x = HOME_X + HOME_W / 2, y = HOME_Y + 6;
-  fill_rect(HOME_X, HOME_Y, HOME_W, HOME_H, C_BLUE_F);
-  line(x - 18, y + 16, x, y, C_TEXT);
-  line(x, y, x + 18, y + 16, C_TEXT);
-  fill_rect(x - 14, y + 16, 28, 20, C_TEXT);
-  fill_rect(x - 11, y + 19, 22, 17, C_BLUE_F);
-  fill_rect(x - 4, y + 25, 8, 11, C_TEXT);
-}
-
-static void render_home(void) {
-  text(56, 38, "APPS", &Font48, C_TEXT);
-  text(58, 94, "Your desk, at a glance", &Font16, C_DIM);
-
-  fill_rect(MONITOR_X, MONITOR_Y, MONITOR_W, MONITOR_H, C_PANEL);
-  fill_rect(MONITOR_X + 22, MONITOR_Y + 20, 152, 152, C_BLUE_F);
-  for (int i = 0; i < 3; i++) {
-    int h = 37 + i * 23;
-    fill_rect(MONITOR_X + 49 + i * 34, MONITOR_Y + 142 - h, 18, h, i == 2 ? C_PURPLE : C_BLUE);
-  }
-  line(MONITOR_X + 38, MONITOR_Y + 98, MONITOR_X + 66, MONITOR_Y + 77, C_TEXT);
-  line(MONITOR_X + 66, MONITOR_Y + 77, MONITOR_X + 101, MONITOR_Y + 86, C_TEXT);
-  line(MONITOR_X + 101, MONITOR_Y + 86, MONITOR_X + 151, MONITOR_Y + 48, C_TEXT);
-  text(MONITOR_X + 27, MONITOR_Y + 184, "MONITOR", &Font24, C_TEXT);
-  text(MONITOR_X + 27, MONITOR_Y + 213, "SYSTEM + AI", &Font12, C_DIM);
-
-  text(56, 432, "Tap an app to open", &Font16, C_DIM);
-  bool online = st.valid && millis() - last_ok_ms < 5000;
-  text(609, 434, online ? "MAC ONLINE" : "MAC OFFLINE", &Font12, online ? C_GREEN : C_AMBER);
-}
-
-static void render(void) {
-  fb = bufs[draw_idx];
-  fill_rect(0, 0, W, H, C_BG);
-  if (screen == SCREEN_HOME) {
-    render_home();
-    waveshare_rgb_lcd_display((uint8_t *)fb);
-    draw_idx ^= 1;
-    return;
-  }
-  char s[64];
-  uint32_t age = st.valid ? (millis() - last_ok_ms) / 1000 : 0;
-  bool stale = !st.valid || age >= 5;
-
-  // banner: memory pressure, or connection state
-  uint16_t bc; const char *bt;
-  if (!st.valid)       { bc = C_GRAY;  bt = "WAITING FOR MAC"; }
-  else if (st.mp >= 4) { bc = C_RED;   bt = "MEMORY CRITICAL - STOP"; }
-  else if (st.mp >= 2) { bc = C_AMBER; bt = "MEMORY WARNING"; }
-  else                 { bc = C_GREEN; bt = "MEMORY OK"; }
-  if (page == 0) {
-    fill_rect(0, 0, W, 56, bc);
-    text(124, 20, bt, &Font16, C_TEXT);
-  }
-  if (page == 0 && stale && st.valid) {
-    snprintf(s, sizeof s, "MAC SILENT %lus", (unsigned long)age);
-    fill_rect(W - 300, 8, 292, 40, C_RED); text(W - 290, 16, s, &Font24, C_TEXT);
-  } else if (page == 0 && !st.valid) {
-    int len = strlen(last_err); if (len > 30) len = 30;
-    text(W - 16 - 11 * len, 20, last_err, &Font16, C_TEXT);
-  }
-
-  if (page == 0) render_system(); else render_ai();
-
-  render_home_icon();
-
-  // page dots
-  for (int i = 0; i < NPAGES; i++) fill_rect(W / 2 - NPAGES * 10 + i * 20 + 3, 471, 8, 6, i == page ? C_TEXT : C_GRID);
-
-  if (stale) for (int y = 64; y < H; y += 3) for (int x = (y / 3) % 2; x < W; x += 6) px(x, y, C_BG);  // dim stale data
-
-  waveshare_rgb_lcd_display((uint8_t *)fb);
-  draw_idx ^= 1;
-}
-
-static void render_system(void) {
-  char s[64];
-  // left column
-  text(16, 72, "CPU", &Font16, C_DIM);
-  snprintf(s, sizeof s, "%d%%", st.cpu); text(16, 92, s, &Font48, st.cpu >= 85 ? C_HOT : C_TEXT);
-  snprintf(s, sizeof s, "load %.2f", st.load); text(16, 144, s, &Font16, C_DIM);
-  // "used / total" hides compression; show how much data apps really hold vs physical RAM
-  text(16, 176, "APP DATA vs RAM", &Font16, C_DIM);
-  snprintf(s, sizeof s, "%.1fG/%.0fG", st.mdemand, st.mtot);
-  text(16, 196, s, &Font24, st.mdemand > st.mtot ? (st.mdemand > st.mtot * 1.5f ? C_HOT : 0xFE60) : C_TEXT);
-  snprintf(s, sizeof s, "zip %.1fG -> %.1fG", st.mstored, st.mcomp); text(16, 224, s, &Font12, C_DIM);
-  snprintf(s, sizeof s, "ram %.1fG  swap %.1fG", st.mused, st.swap); text(16, 240, s, &Font12, C_DIM);
-  text(16, 262, "TOP", &Font16, C_DIM);
-  for (int i = 0; i < st.ntop; i++) {
-    char nm[15]; strncpy(nm, st.top[i].name, 14); nm[14] = 0;
-    text(16, 284 + i * 36, nm, &Font16, C_TEXT);
-    snprintf(s, sizeof s, "%d%% %dM", st.top[i].cpu, st.top[i].rss);
-    text(16, 302 + i * 36, s, &Font12, C_DIM);
-  }
-
-  // right: CPU chart, per-core bars, swap chart
-  const int X = 262, CW = W - X - 12;
-  text(X, 68, "CPU  last 2 min", &Font12, C_DIM);
-  chart(X, 84, CW, 170, st.hcpu, st.nh, C_BLUE, C_BLUE_F, "100%", "50%", "0%");
-  if (st.ncores) {
-    int bw = (CW - GUTTER - (st.ncores - 1) * 6) / st.ncores;
-    for (int i = 0; i < st.ncores; i++) {
-      int bx = X + GUTTER + i * (bw + 6), bh = 34, fh = st.cores[i] * bh / 100;
-      fill_rect(bx, 262, bw, bh, C_PANEL);
-      fill_rect(bx, 262 + bh - fh, bw, fh, st.cores[i] >= 90 ? C_HOT : C_BLUE);
-    }
-  }
-  // swap I/O, auto-scaled to a round ceiling so idle stays flat and bursts stay readable
-  int peak = 0; for (int i = 0; i < st.nh; i++) if (st.hsw[i] > peak) peak = st.hsw[i];
-  static const int CEIL[] = {10, 20, 50, 100, 200, 500, 1000, 2000, 5000};
-  int top = 5000; for (int i = 0; i < 9; i++) if (peak <= CEIL[i]) { top = CEIL[i]; break; }
-  uint8_t pct[120]; for (int i = 0; i < st.nh; i++) { int p = st.hsw[i] * 100 / top; pct[i] = p > 100 ? 100 : p; }
-  bool hot = st.swapr >= 20;
-  snprintf(s, sizeof s, "SWAP I/O  now %.0f MB/s  (0 = healthy)", st.swapr);
-  text(X, 306, s, &Font12, hot ? C_HOT : C_DIM);
-  char s_top[12], s_mid[12];
-  snprintf(s_top, sizeof s_top, "%d", top); snprintf(s_mid, sizeof s_mid, "%d", top / 2);
-  chart(X, 322, CW, 146, pct, st.nh, hot ? C_HOT : C_PURPLE, C_PURP_F, s_top, s_mid, "0");
-}
-
-static void fmt_dur(char *out, size_t n, int secs) {
-  if (secs < 0) snprintf(out, n, "reset time unknown");
-  else if (secs >= 86400) snprintf(out, n, "resets in %dd %dh", secs / 86400, secs % 86400 / 3600);
-  else if (secs >= 3600) snprintf(out, n, "resets in %dh %dm", secs / 3600, secs % 3600 / 60);
-  else snprintf(out, n, "resets in %dm", (secs + 59) / 60);
-}
-static void usage_row(int y, const char *label, int pct, int reset) {
-  char s[40];
-  text(16, y + 8, label, &Font16, C_DIM);
-  const int bx = 130, bw = 500, bh = 32;
-  fill_rect(bx, y, bw, bh, C_PANEL);
-  if (pct >= 0) {
-    int w = (pct > 100 ? 100 : pct) * bw / 100;
-    fill_rect(bx, y, w, bh, pct >= 90 ? C_HOT : pct >= 70 ? 0xFE60 : C_BLUE);
-    snprintf(s, sizeof s, "%d%%", pct);
-  } else snprintf(s, sizeof s, "--");
-  text(650, y + 4, s, &Font24, pct >= 90 ? C_HOT : C_TEXT);
-  fmt_dur(s, sizeof s, reset);
-  text(bx, y + 38, s, &Font12, C_DIM);
-}
-static void usage_section(int y, const char *name, const ai_t *a) {
-  char s[64];
-  text(16, y, name, &Font24, C_TEXT);
-  if (a->plan[0]) { snprintf(s, sizeof s, "(%s)", a->plan); text(16 + 17 * strlen(name) + 10, y + 6, s, &Font16, C_DIM); }
-  if (a->err[0]) { snprintf(s, sizeof s, "! %s", a->err); text(W - 16 - 7 * strlen(s), y + 8, s, &Font12, C_HOT); }
-  else if (a->age >= 0) { snprintf(s, sizeof s, "updated %dm ago", a->age / 60); text(W - 16 - 7 * strlen(s), y + 8, s, &Font12, C_DIM); }
-  usage_row(y + 40, "5 HOUR", a->h5, a->h5r);
-  usage_row(y + 112, "WEEKLY", a->wk, a->wkr);
-}
-#define BTN_X 600
-#define BTN_Y 10
-#define BTN_W 184
-#define BTN_H 44
-static uint32_t refresh_pressed_ms = 0;
-static void render_ai(void) {
-  text(124, 20, "AI USAGE", &Font24, C_TEXT);
-  bool busy = ai[0].busy || ai[1].busy || millis() - refresh_pressed_ms < 1500;
-  fill_rect(BTN_X, BTN_Y, BTN_W, BTN_H, busy ? C_GRAY : C_BLUE);
-  const char *lbl = busy ? "UPDATING" : "REFRESH";
-  text(BTN_X + (BTN_W - 17 * strlen(lbl)) / 2, BTN_Y + 10, lbl, &Font24, C_TEXT);
-  if (!st.valid || millis() - last_ok_ms >= 5000) text(328, 26, "mac not responding", &Font12, C_HOT);
-  usage_section(72, "CLAUDE CODE", &ai[0]);
-  for (int x = 16; x < W - 16; x += 4) px(x, 254, C_GRID);
-  usage_section(264, "CODEX", &ai[1]);
-}
 
 // ---------------- network ----------------
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
@@ -492,15 +217,6 @@ static void console_task(void *arg) {
 }
 
 // ---------------- main ----------------
-static void fonts_to_sram(void) {
-  sFONT *fonts[] = {&Font12, &Font16, &Font24, &Font48};
-  for (int i = 0; i < 4; i++) {
-    size_t n = 95 * fonts[i]->Height * ((fonts[i]->Width + 7) / 8);
-    uint8_t *p = heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (p) { memcpy(p, fonts[i]->table, n); fonts[i]->table = p; }
-  }
-}
-
 void app_main(void) {
   esp_err_t e = nvs_flash_init();
   if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) { nvs_flash_erase(); nvs_flash_init(); }
@@ -510,47 +226,25 @@ void app_main(void) {
   usb_serial_jtag_vfs_use_driver();
   setvbuf(stdin, NULL, _IONBF, 0);
 
-  fonts_to_sram();
-  touch_gt911_init();  // also brings up I2C and the IO expander
-  waveshare_esp32_s3_rgb_lcd_init();
+  touch_gt911_init();  // initializes the I2C expander too
+  esp_lcd_panel_handle_t panel = waveshare_esp32_s3_rgb_lcd_init();
+  ui_init(panel);
   waveshare_rgb_lcd_bl_on();
   IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]);
-  void *b1, *b2; waveshare_get_frame_buffer(&b1, &b2);
-  bufs[0] = b1; bufs[1] = b2;
 
   for (int k = 0; k < 2; k++) { ai[k].h5 = ai[k].wk = ai[k].h5r = ai[k].wkr = ai[k].age = -1; strlcpy(ai[k].err, "waiting", sizeof ai[k].err); }
   load_cfg();
   xTaskCreate(console_task, "console", 4096, NULL, 3, NULL);
   if (n_nets) wifi_start(); else snprintf(last_err, sizeof last_err, "no wifi config");
-  render();
+  ui_present(&st, ai, false, last_err);
 
   uint32_t next_fetch = 0; int saved_net = -1;
-  bool touching = false; int t_x0 = 0, t_y0 = 0, t_x = 0, t_y = 0; uint32_t t_ms = 0;
   for (;;) {
-    touch_gt911_point_t tp = touch_gt911_read_point(1);
-    if (tp.cnt > 0) {
-      if (!touching) { touching = true; t_x0 = tp.x[0]; t_y0 = tp.y[0]; t_ms = millis(); }
-      t_x = tp.x[0]; t_y = tp.y[0];
-    } else if (touching) {  // released: route the gesture to the visible screen
-      touching = false;
-      int dx = t_x - t_x0;
-      bool tap = abs(dx) < 25 && abs(t_y - t_y0) < 25 && millis() - t_ms < 600;
-      if (screen == SCREEN_HOME) {
-        if (tap && inside(t_x0, t_y0, MONITOR_X, MONITOR_Y, MONITOR_W, MONITOR_H)) {
-          screen = SCREEN_MONITOR; page = 0; render();
-        } else if (tap) {
-          bright_idx = (bright_idx + 1) % sizeof BRIGHT; IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]);
-        }
-      } else if (tap && inside(t_x0, t_y0, HOME_X, HOME_Y, HOME_W, HOME_H)) {
-        screen = SCREEN_HOME; render();
-      } else if (dx <= -100 || dx >= 100) {
-        page = (page + (dx < 0 ? 1 : NPAGES - 1)) % NPAGES; render();
-      } else if (tap) {
-        if (page == 1 && inside(t_x0, t_y0, BTN_X - 10, BTN_Y - 10, BTN_W + 20, BTN_H + 20)) {
-          refresh_pressed_ms = millis(); render(); request_ai_refresh();
-        } else { bright_idx = (bright_idx + 1) % sizeof BRIGHT; IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]); }
-      }
+    if (ui_take_brightness_request()) {
+      bright_idx = (bright_idx + 1) % sizeof BRIGHT;
+      IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]);
     }
+    if (ui_take_refresh_request()) request_ai_refresh();
 
     if ((int32_t)(millis() - next_fetch) >= 0) {
       next_fetch = millis() + 1000;
@@ -567,7 +261,7 @@ void app_main(void) {
           saved_net = net_idx;
         }
       }
-      render();
+      ui_present(&st, ai, st.valid && millis() - last_ok_ms < 5000, last_err);
     }
     vTaskDelay(pdMS_TO_TICKS(20));
   }
