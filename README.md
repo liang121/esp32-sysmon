@@ -15,6 +15,7 @@
 | 路径 | 说明 |
 | --- | --- |
 | `firmware-idf/` | 当前使用的 ESP-IDF / LVGL 固件、应用首页、双页面监控与屏幕触摸驱动。 |
+| `previews/` | 800×480 布局预览与生成脚本；可在刷机前检查 8 核、16 核、AI 页和首页。预览数据是示例。 |
 | `mac/` | Swift 系统采集器、Node 服务、浏览器状态页、串口配置工具和登录自启脚本。 |
 | `firmware/sysmon/` | 早期 Arduino 版本及配套板级源码，留作参考；双页面功能请使用 `firmware-idf/`。 |
 
@@ -62,6 +63,7 @@ node mac/configure.mjs status
 | Path | Contents |
 | --- | --- |
 | `firmware-idf/` | Current ESP-IDF / LVGL firmware, app launcher, two monitor pages, and display/touch components. |
+| `previews/` | 800×480 layout preview and generator for the 8-core, 16-core, AI, and launcher screens. Preview data is illustrative. |
 | `mac/` | Swift sampler, Node server, browser status page, serial configurator, and login agent installer. |
 | `firmware/sysmon/` | Earlier Arduino version and board sources for reference; build `firmware-idf/` for both pages. |
 
