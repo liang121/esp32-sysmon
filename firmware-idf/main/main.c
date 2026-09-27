@@ -88,8 +88,18 @@ static stats_t st;
 // AI subscription usage (Claude Code / Codex): percent used and seconds until reset per window
 typedef struct { int h5, h5r, wk, wkr, age, busy; char plan[12], err[41]; } ai_t;
 static ai_t ai[2];  // 0 = Claude Code, 1 = Codex
+typedef enum { SCREEN_HOME, SCREEN_MONITOR } screen_t;
+static screen_t screen = SCREEN_HOME;
 static int page = 0;
 #define NPAGES 2
+#define HOME_X 16
+#define HOME_Y 8
+#define HOME_W 96
+#define HOME_H 44
+#define MONITOR_X 56
+#define MONITOR_Y 128
+#define MONITOR_W 196
+#define MONITOR_H 232
 static uint32_t last_ok_ms = 0, conn_start_ms = 0;
 static char last_err[40] = "starting";
 static volatile bool wifi_up = false;
@@ -108,6 +118,9 @@ static void fill_rect(int x, int y, int w, int h, uint16_t c) {
   if (x + w > W) w = W - x;
   if (y + h > H) h = H - y;
   for (int j = 0; j < h; j++) { uint16_t *p = fb + (y + j) * W + x; for (int i = 0; i < w; i++) p[i] = c; }
+}
+static bool inside(int x, int y, int left, int top, int w, int h) {
+  return x >= left && x < left + w && y >= top && y < top + h;
 }
 static void vline(int x, int y0, int y1, uint16_t c) { if (y0 > y1) { int t = y0; y0 = y1; y1 = t; } for (int y = y0; y <= y1; y++) px(x, y, c); }
 static void line(int x0, int y0, int x1, int y1, uint16_t c) {
@@ -160,9 +173,36 @@ static void chart(int x, int y, int w, int h, const uint8_t *v, int n, uint16_t 
 static void render_system(void);
 static void render_ai(void);
 
+static void render_home(void) {
+  text(56, 38, "APPS", &Font48, C_TEXT);
+  text(58, 94, "Your desk, at a glance", &Font16, C_DIM);
+
+  fill_rect(MONITOR_X, MONITOR_Y, MONITOR_W, MONITOR_H, C_PANEL);
+  fill_rect(MONITOR_X + 22, MONITOR_Y + 20, 152, 152, C_BLUE_F);
+  for (int i = 0; i < 3; i++) {
+    int h = 37 + i * 23;
+    fill_rect(MONITOR_X + 49 + i * 34, MONITOR_Y + 142 - h, 18, h, i == 2 ? C_PURPLE : C_BLUE);
+  }
+  line(MONITOR_X + 38, MONITOR_Y + 98, MONITOR_X + 66, MONITOR_Y + 77, C_TEXT);
+  line(MONITOR_X + 66, MONITOR_Y + 77, MONITOR_X + 101, MONITOR_Y + 86, C_TEXT);
+  line(MONITOR_X + 101, MONITOR_Y + 86, MONITOR_X + 151, MONITOR_Y + 48, C_TEXT);
+  text(MONITOR_X + 27, MONITOR_Y + 184, "MONITOR", &Font24, C_TEXT);
+  text(MONITOR_X + 27, MONITOR_Y + 213, "SYSTEM + AI", &Font12, C_DIM);
+
+  text(56, 432, "Tap an app to open", &Font16, C_DIM);
+  bool online = st.valid && millis() - last_ok_ms < 5000;
+  text(609, 434, online ? "MAC ONLINE" : "MAC OFFLINE", &Font12, online ? C_GREEN : C_AMBER);
+}
+
 static void render(void) {
   fb = bufs[draw_idx];
   fill_rect(0, 0, W, H, C_BG);
+  if (screen == SCREEN_HOME) {
+    render_home();
+    waveshare_rgb_lcd_display((uint8_t *)fb);
+    draw_idx ^= 1;
+    return;
+  }
   char s[64];
   uint32_t age = st.valid ? (millis() - last_ok_ms) / 1000 : 0;
   bool stale = !st.valid || age >= 5;
@@ -174,8 +214,8 @@ static void render(void) {
   else if (st.mp >= 2) { bc = C_AMBER; bt = "MEMORY WARNING"; }
   else                 { bc = C_GREEN; bt = "MEMORY OK"; }
   if (page == 0) {
-  fill_rect(0, 0, W, 56, bc);
-  text(16, 16, bt, &Font24, C_TEXT);
+    fill_rect(0, 0, W, 56, bc);
+    text(124, 20, bt, &Font16, C_TEXT);
   }
   if (page == 0 && stale && st.valid) {
     snprintf(s, sizeof s, "MAC SILENT %lus", (unsigned long)age);
@@ -186,6 +226,9 @@ static void render(void) {
   }
 
   if (page == 0) render_system(); else render_ai();
+
+  fill_rect(HOME_X, HOME_Y, HOME_W, HOME_H, C_PANEL);
+  text(HOME_X + 14, HOME_Y + 10, "HOME", &Font24, C_TEXT);
 
   // page dots
   for (int i = 0; i < NPAGES; i++) fill_rect(W / 2 - NPAGES * 10 + i * 20 + 3, 471, 8, 6, i == page ? C_TEXT : C_GRID);
@@ -276,12 +319,12 @@ static void usage_section(int y, const char *name, const ai_t *a) {
 #define BTN_H 44
 static uint32_t refresh_pressed_ms = 0;
 static void render_ai(void) {
-  text(16, 20, "AI USAGE", &Font24, C_TEXT);
+  text(124, 20, "AI USAGE", &Font24, C_TEXT);
   bool busy = ai[0].busy || ai[1].busy || millis() - refresh_pressed_ms < 1500;
   fill_rect(BTN_X, BTN_Y, BTN_W, BTN_H, busy ? C_GRAY : C_BLUE);
   const char *lbl = busy ? "UPDATING" : "REFRESH";
   text(BTN_X + (BTN_W - 17 * strlen(lbl)) / 2, BTN_Y + 10, lbl, &Font24, C_TEXT);
-  if (!st.valid || millis() - last_ok_ms >= 5000) text(260, 26, "mac not responding", &Font12, C_HOT);
+  if (!st.valid || millis() - last_ok_ms >= 5000) text(328, 26, "mac not responding", &Font12, C_HOT);
   usage_section(72, "CLAUDE CODE", &ai[0]);
   for (int x = 16; x < W - 16; x += 4) px(x, 254, C_GRID);
   usage_section(264, "CODEX", &ai[1]);
@@ -473,18 +516,28 @@ void app_main(void) {
   render();
 
   uint32_t next_fetch = 0; int saved_net = -1;
-  bool touching = false; int t_x0 = 0, t_y0 = 0, t_x = 0; uint32_t t_ms = 0;
+  bool touching = false; int t_x0 = 0, t_y0 = 0, t_x = 0, t_y = 0; uint32_t t_ms = 0;
   for (;;) {
     touch_gt911_point_t tp = touch_gt911_read_point(1);
     if (tp.cnt > 0) {
       if (!touching) { touching = true; t_x0 = tp.x[0]; t_y0 = tp.y[0]; t_ms = millis(); }
-      t_x = tp.x[0];
-    } else if (touching) {  // released: horizontal swipe switches page, a short tap cycles brightness
+      t_x = tp.x[0]; t_y = tp.y[0];
+    } else if (touching) {  // released: route the gesture to the visible screen
       touching = false;
       int dx = t_x - t_x0;
-      if (dx <= -100 || dx >= 100) { page = (page + (dx < 0 ? 1 : NPAGES - 1)) % NPAGES; render(); }
-      else if (abs(dx) < 25 && millis() - t_ms < 600) {
-        if (page == 1 && t_x0 >= BTN_X - 10 && t_x0 < BTN_X + BTN_W + 10 && t_y0 >= BTN_Y - 10 && t_y0 < BTN_Y + BTN_H + 10) {
+      bool tap = abs(dx) < 25 && abs(t_y - t_y0) < 25 && millis() - t_ms < 600;
+      if (screen == SCREEN_HOME) {
+        if (tap && inside(t_x0, t_y0, MONITOR_X, MONITOR_Y, MONITOR_W, MONITOR_H)) {
+          screen = SCREEN_MONITOR; page = 0; render();
+        } else if (tap) {
+          bright_idx = (bright_idx + 1) % sizeof BRIGHT; IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]);
+        }
+      } else if (tap && inside(t_x0, t_y0, HOME_X, HOME_Y, HOME_W, HOME_H)) {
+        screen = SCREEN_HOME; render();
+      } else if (dx <= -100 || dx >= 100) {
+        page = (page + (dx < 0 ? 1 : NPAGES - 1)) % NPAGES; render();
+      } else if (tap) {
+        if (page == 1 && inside(t_x0, t_y0, BTN_X - 10, BTN_Y - 10, BTN_W + 20, BTN_H + 20)) {
           refresh_pressed_ms = millis(); render(); request_ai_refresh();
         } else { bright_idx = (bright_idx + 1) % sizeof BRIGHT; IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]); }
       }

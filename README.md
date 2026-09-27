@@ -4,10 +4,10 @@
 
 ## 中文
 
-**Sysmon** 是一块放在桌上的 Mac 状态屏，运行在 Waveshare ESP32-S3-Touch-LCD-4.3C 上。它把电脑运行状态与 AI 编程工具的用量放在两页触摸屏里，抬眼就能看到。
+**Sysmon** 是一块放在桌上的 Mac 状态屏，运行在 Waveshare ESP32-S3-Touch-LCD-4.3C 上。开机进入应用首页，点击 **MONITOR** 图标后，可在两页触摸屏中查看电脑运行状态与 AI 编程工具的用量。
 
 - **系统监控页：**显示 CPU 总体与各核心负载、最近两分钟的曲线、内存占用与内存压力、压缩内存、交换空间活动，以及占用资源较多的进程。
-- **AI 用量页：**显示 Claude Code 与 Codex 的五小时和每周用量、重置倒计时与数据更新时间。点按 **REFRESH** 可手动刷新；横向滑动切换页面，点按屏幕可切换背光亮度。
+- **AI 用量页：**显示 Claude Code 与 Codex 的五小时和每周用量、重置倒计时与数据更新时间。点按 **REFRESH** 可手动刷新；在 Monitor 内横向滑动切换页面，两页的 **HOME** 按钮可返回应用首页。点按空白区域可切换背光亮度。
 - **本地运行：**Mac 用 Swift 采集系统指标，Node.js 提供局域网数据接口；ESP32 通过 Wi-Fi 每秒读取一次数据并绘制屏幕。Claude Code 凭据从 macOS 钥匙串读取，Codex 用量通过本机 Codex CLI 获取，凭据不写入项目源码。
 
 ### 项目结构
@@ -49,10 +49,10 @@ node mac/configure.mjs status
 
 ## English
 
-**Sysmon** is a small desk display for the Waveshare ESP32-S3-Touch-LCD-4.3C. It puts Mac performance and AI coding subscription usage on two touch-screen pages, so you can check both at a glance.
+**Sysmon** is a small desk display for the Waveshare ESP32-S3-Touch-LCD-4.3C. It boots into an app home screen: tap **MONITOR** to see Mac performance and AI coding subscription usage on two touch-screen pages.
 
 - **System page:** overall and per-core CPU load, a two-minute chart, memory usage and pressure, compressed memory, swap activity, and resource-heavy processes.
-- **AI usage page:** Claude Code and Codex usage for the five-hour and weekly windows, reset countdowns, and data age. Tap **REFRESH** to update usage, swipe horizontally to switch pages, or tap the screen to cycle backlight brightness.
+- **AI usage page:** Claude Code and Codex usage for the five-hour and weekly windows, reset countdowns, and data age. Tap **REFRESH** to update usage, swipe within Monitor to switch pages, or tap **HOME** on either page to return to the app launcher. Tap an unused area to cycle backlight brightness.
 - **Local data flow:** a Swift sampler gathers Mac metrics, a Node.js server exposes them on the LAN, and the ESP32 reads and draws the data once a second over Wi-Fi. Claude Code credentials are read from macOS Keychain; Codex usage comes from the local Codex CLI. Credentials are never embedded in the source.
 
 ### Repository layout
