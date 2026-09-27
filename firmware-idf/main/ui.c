@@ -16,7 +16,7 @@
 #define HOT 0xFF6040
 
 static lv_obj_t *screens[3]; // app launcher, system, AI usage
-static lv_obj_t *online_label, *status_label, *cpu_label, *memory_label, *details_label;
+static lv_obj_t *online_label, *status_label, *cpu_label, *load_label, *memory_label, *details_label;
 static lv_obj_t *process_labels[5], *core_bars[16], *cpu_chart, *swap_chart;
 static lv_chart_series_t *cpu_series, *swap_series;
 static lv_obj_t *swap_label, *refresh_label, *ai_title[2], *ai_status[2];
@@ -99,14 +99,14 @@ static lv_obj_t *card(lv_obj_t *parent, int x, int y, int w, int h) {
 }
 
 static void add_dots(lv_obj_t *screen, int selected) {
-    label(screen, selected == 0 ? "●  ○" : "○  ●", 376, 455, &lv_font_montserrat_12, TEXT);
+    label(screen, selected == 0 ? "●  ○" : "○  ●", 376, 459, &lv_font_montserrat_12, TEXT);
 }
 
 static void create_launcher(void) {
     lv_obj_t *s = screens[0] = base_screen();
-    label(s, "APPS", 56, 30, &lv_font_montserrat_48, TEXT);
-    label(s, "Your desk, at a glance", 58, 94, &lv_font_montserrat_18, DIM);
-    lv_obj_t *tile = card(s, 56, 128, 196, 232);
+    label(s, "APPS", 56, 31, &lv_font_montserrat_32, TEXT);
+    label(s, "Your desk, at a glance", 58, 78, &lv_font_montserrat_18, DIM);
+    lv_obj_t *tile = card(s, 56, 124, 196, 232);
     lv_obj_add_event_cb(tile, on_enter, LV_EVENT_CLICKED, NULL);
     lv_obj_t *art = card(tile, 8, 4, 152, 152);
     lv_obj_set_style_bg_color(art, color(0x143356), 0);
@@ -153,31 +153,42 @@ static lv_obj_t *new_chart(lv_obj_t *parent, int x, int y, int h, uint32_t ink,
 static void create_system(void) {
     lv_obj_t *s = screens[1] = base_screen();
     add_home(s);
-    status_label = label(s, "WAITING FOR MAC", 124, 17, &lv_font_montserrat_24, DIM);
-    label(s, "CPU", 16, 72, &lv_font_montserrat_18, DIM);
-    cpu_label = label(s, "--%", 16, 93, &lv_font_montserrat_48, TEXT);
-    label(s, "APP DATA vs RAM", 16, 176, &lv_font_montserrat_18, DIM);
-    memory_label = label(s, "--", 16, 202, &lv_font_montserrat_24, TEXT);
-    details_label = label(s, "Waiting for data", 16, 237, &lv_font_montserrat_12, DIM);
-    label(s, "TOP", 16, 263, &lv_font_montserrat_18, DIM);
+    label(s, "SYSTEM", 80, 17, &lv_font_montserrat_24, TEXT);
+    status_label = label(s, "WAITING FOR MAC", 440, 24, &lv_font_montserrat_12, DIM);
+    lv_obj_set_width(status_label, 340);
+    lv_label_set_long_mode(status_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_t *cpu_panel = card(s, 16, 72, 246, 98);
+    lv_obj_t *memory_panel = card(s, 16, 180, 246, 100);
+    lv_obj_t *process_panel = card(s, 16, 290, 246, 154);
+    lv_obj_set_clickable(cpu_panel, false);
+    lv_obj_set_clickable(memory_panel, false);
+    lv_obj_set_clickable(process_panel, false);
+    label(s, "CPU", 30, 83, &lv_font_montserrat_12, DIM);
+    cpu_label = label(s, "--%", 30, 105, &lv_font_montserrat_32, TEXT);
+    load_label = label(s, "load --", 145, 133, &lv_font_montserrat_12, DIM);
+    label(s, "APP DATA vs RAM", 30, 189, &lv_font_montserrat_12, DIM);
+    memory_label = label(s, "--", 30, 210, &lv_font_montserrat_24, TEXT);
+    details_label = label(s, "Waiting for data", 30, 242, &lv_font_montserrat_12, DIM);
+    label(s, "TOP PROCESSES", 30, 299, &lv_font_montserrat_12, DIM);
     for (int i = 0; i < 5; ++i)
-        process_labels[i] = label(s, "", 16, 286 + i * 34, &lv_font_montserrat_12, TEXT);
-    label(s, "CPU  last 2 min", 302, 66, &lv_font_montserrat_12, DIM);
-    cpu_chart = new_chart(s, 302, 84, 169, BLUE, &cpu_series);
-    label(s, "100", 265, 86, &lv_font_montserrat_12, DIM);
-    label(s, "0", 280, 235, &lv_font_montserrat_12, DIM);
+        process_labels[i] = label(s, "", 30, 321 + i * 23, &lv_font_montserrat_12, TEXT);
+    label(s, "CPU  /  LAST 2 MIN", 302, 75, &lv_font_montserrat_12, DIM);
+    cpu_chart = new_chart(s, 302, 98, 147, BLUE, &cpu_series);
+    label(s, "100", 267, 99, &lv_font_montserrat_12, DIM);
+    label(s, "0", 282, 226, &lv_font_montserrat_12, DIM);
     for (int i = 0; i < 16; ++i) {
         core_bars[i] = lv_bar_create(s);
-        lv_obj_set_pos(core_bars[i], 302 + i * 30, 262);
-        lv_obj_set_size(core_bars[i], 23, 34);
+        lv_obj_set_pos(core_bars[i], 302 + i * 30, 256);
+        lv_obj_set_size(core_bars[i], 23, 32);
         lv_bar_set_range(core_bars[i], 0, 100);
         lv_bar_set_value(core_bars[i], 0, LV_ANIM_OFF);
         lv_obj_set_style_bg_color(core_bars[i], color(PANEL), LV_PART_MAIN);
         lv_obj_set_style_bg_color(core_bars[i], color(BLUE), LV_PART_INDICATOR);
         lv_obj_set_gesture_bubble(core_bars[i], true);
     }
-    swap_label = label(s, "SWAP I/O  (0 = healthy)", 302, 307, &lv_font_montserrat_12, DIM);
-    swap_chart = new_chart(s, 302, 327, 130, PURPLE, &swap_series);
+    swap_label = label(s, "SWAP I/O  (0 = healthy)", 302, 302, &lv_font_montserrat_12, DIM);
+    swap_chart = new_chart(s, 302, 323, 121, PURPLE, &swap_series);
     add_dots(s, 0);
 }
 
@@ -189,32 +200,38 @@ static void fmt_dur(char *dst, size_t size, int seconds) {
 }
 
 static void create_usage_section(lv_obj_t *s, int k, int y, const char *title) {
-    ai_title[k] = label(s, title, 16, y, &lv_font_montserrat_24, TEXT);
-    ai_status[k] = label(s, "waiting", 530, y + 8, &lv_font_montserrat_12, DIM);
+    lv_obj_t *section = card(s, 16, y, 768, 184);
+    lv_obj_set_clickable(section, false);
+    ai_title[k] = label(s, title, 30, y + 9, &lv_font_montserrat_24, TEXT);
+    ai_status[k] = label(s, "waiting", 516, y + 18, &lv_font_montserrat_12, DIM);
+    lv_obj_set_width(ai_status[k], 252);
+    lv_label_set_long_mode(ai_status[k], LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(ai_status[k], LV_TEXT_ALIGN_RIGHT, 0);
     for (int row = 0; row < 2; ++row) {
-        int ry = y + 42 + row * 72;
-        label(s, row ? "WEEKLY" : "5 HOUR", 16, ry + 8, &lv_font_montserrat_18, DIM);
+        int ry = y + 46 + row * 72;
+        label(s, row ? "WEEKLY" : "5 HOUR", 30, ry + 8, &lv_font_montserrat_18, DIM);
         usage_bar[k][row] = lv_bar_create(s);
-        lv_obj_set_pos(usage_bar[k][row], 130, ry);
-        lv_obj_set_size(usage_bar[k][row], 500, 32);
+        lv_obj_set_pos(usage_bar[k][row], 142, ry);
+        lv_obj_set_size(usage_bar[k][row], 480, 32);
         lv_bar_set_range(usage_bar[k][row], 0, 100);
         lv_bar_set_value(usage_bar[k][row], 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(usage_bar[k][row], color(PANEL), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(usage_bar[k][row], color(0x2B3C49), LV_PART_MAIN);
         lv_obj_set_style_bg_color(usage_bar[k][row], color(BLUE), LV_PART_INDICATOR);
         lv_obj_set_gesture_bubble(usage_bar[k][row], true);
         usage_pct[k][row] = label(s, "--", 650, ry + 2, &lv_font_montserrat_24, TEXT);
-        usage_reset[k][row] = label(s, "", 130, ry + 38, &lv_font_montserrat_12, DIM);
+        usage_reset[k][row] = label(s, "", 142, ry + 38, &lv_font_montserrat_12, DIM);
     }
 }
 
 static void create_ai(void) {
     lv_obj_t *s = screens[2] = base_screen();
     add_home(s);
-    label(s, "AI USAGE", 124, 16, &lv_font_montserrat_24, TEXT);
-    lv_obj_t *button = card(s, 600, 7, 184, 48);
+    label(s, "AI USAGE", 80, 17, &lv_font_montserrat_24, TEXT);
+    lv_obj_t *button = card(s, 630, 8, 154, 44);
     lv_obj_set_style_bg_color(button, color(BLUE), 0);
     lv_obj_add_event_cb(button, on_refresh, LV_EVENT_CLICKED, NULL);
-    refresh_label = label(button, "REFRESH", 24, 2, &lv_font_montserrat_24, 0xFFFFFF);
+    refresh_label = label(button, "REFRESH", 0, 0, &lv_font_montserrat_18, 0xFFFFFF);
+    lv_obj_align(refresh_label, LV_ALIGN_CENTER, 0, 0);
     create_usage_section(s, 0, 72, "CLAUDE CODE");
     create_usage_section(s, 1, 264, "CODEX");
     add_dots(s, 1);
@@ -271,8 +288,10 @@ void ui_present(const stats_t *stats, const ai_t ai[2], bool mac_online, const c
     snprintf(line, sizeof line, "%s%s%s", banner, mac_online ? "" : "  /  ", mac_online ? "" : last_error);
     lv_label_set_text(status_label, line);
     lv_obj_set_style_text_color(status_label, color(stats->mp >= 4 ? HOT : stats->mp >= 2 ? 0xE3B35F : DIM), 0);
-    snprintf(line, sizeof line, "%d%%  load %.2f", stats->cpu, stats->load);
+    snprintf(line, sizeof line, "%d%%", stats->cpu);
     lv_label_set_text(cpu_label, line);
+    snprintf(line, sizeof line, "load %.2f", stats->load);
+    lv_label_set_text(load_label, line);
     snprintf(line, sizeof line, "%.1fG / %.0fG", stats->mdemand, stats->mtot);
     lv_label_set_text(memory_label, line);
     snprintf(line, sizeof line, "zip %.1fG -> %.1fG\nram %.1fG  swap %.1fG", stats->mstored, stats->mcomp, stats->mused, stats->swap);
