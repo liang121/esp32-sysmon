@@ -94,7 +94,7 @@ static int page = 0;
 #define NPAGES 2
 #define HOME_X 16
 #define HOME_Y 8
-#define HOME_W 96
+#define HOME_W 56
 #define HOME_H 44
 #define MONITOR_X 56
 #define MONITOR_Y 128
@@ -173,6 +173,16 @@ static void chart(int x, int y, int w, int h, const uint8_t *v, int n, uint16_t 
 static void render_system(void);
 static void render_ai(void);
 
+static void render_home_icon(void) {
+  int x = HOME_X + HOME_W / 2, y = HOME_Y + 6;
+  fill_rect(HOME_X, HOME_Y, HOME_W, HOME_H, C_BLUE_F);
+  line(x - 18, y + 16, x, y, C_TEXT);
+  line(x, y, x + 18, y + 16, C_TEXT);
+  fill_rect(x - 14, y + 16, 28, 20, C_TEXT);
+  fill_rect(x - 11, y + 19, 22, 17, C_BLUE_F);
+  fill_rect(x - 4, y + 25, 8, 11, C_TEXT);
+}
+
 static void render_home(void) {
   text(56, 38, "APPS", &Font48, C_TEXT);
   text(58, 94, "Your desk, at a glance", &Font16, C_DIM);
@@ -227,8 +237,7 @@ static void render(void) {
 
   if (page == 0) render_system(); else render_ai();
 
-  fill_rect(HOME_X, HOME_Y, HOME_W, HOME_H, C_PANEL);
-  text(HOME_X + 14, HOME_Y + 10, "HOME", &Font24, C_TEXT);
+  render_home_icon();
 
   // page dots
   for (int i = 0; i < NPAGES; i++) fill_rect(W / 2 - NPAGES * 10 + i * 20 + 3, 471, 8, 6, i == page ? C_TEXT : C_GRID);
