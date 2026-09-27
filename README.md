@@ -2,6 +2,22 @@
 
 [中文](#中文) · [English](#english)
 
+## 界面预览 / UI preview
+
+800×480 布局预览，图中数值为示例。/ 800×480 layout previews with sample data.
+
+**系统监控 / System monitor**
+
+![系统监控页：CPU、内存、进程和各核心负载 / System monitor with CPU, memory, processes and per-core load](previews/system-8-core.png)
+
+**AI 用量 / AI usage**
+
+![AI 用量页：Claude Code 和 Codex / AI usage for Claude Code and Codex](previews/ai-usage.png)
+
+**16 核布局 / 16-core layout**
+
+![16 核系统监控布局 / System monitor layout with 16 CPU cores](previews/system-16-core.png)
+
 ## 中文
 
 **Sysmon** 是一块放在桌上的 Mac 状态屏，运行在 Waveshare ESP32-S3-Touch-LCD-4.3C 上。开机进入 LVGL 应用首页，点击 **MONITOR** 图标后，可在两页触摸屏中查看电脑运行状态与 AI 编程工具的用量。首页保留了以后添加更多应用的位置。
