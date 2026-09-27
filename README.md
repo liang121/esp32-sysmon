@@ -1,46 +1,93 @@
-# ESP32 Mac system monitor
+# Sysmon · ESP32 桌面监控屏 / ESP32 Desktop Monitor
 
-Source for a Waveshare ESP32-S3-Touch-LCD-4.3C display and its macOS data collector. The display has two swipeable pages:
+[中文](#中文) · [English](#english)
 
-- **System:** CPU and per-core usage, memory pressure and usage, swap activity, recent history, and top processes.
-- **AI usage:** Claude Code and Codex five-hour and weekly usage windows, reset countdowns, and a manual refresh button.
+## 中文
 
-The ESP32 reads `GET /api/now` from the Mac over the local network once a second. The Mac collector uses a native Swift sampler for system metrics, the Claude Code credential in macOS Keychain, and a locally installed Codex CLI for usage data. Tokens are read at runtime and are not stored in this repository. The Claude Code usage endpoint is undocumented and can return HTTP 429; the display may then show cached values and an error.
+**Sysmon** 是一块放在桌上的 Mac 状态屏，运行在 Waveshare ESP32-S3-Touch-LCD-4.3C 上。它把电脑运行状态与 AI 编程工具的用量放在两页触摸屏里，抬眼就能看到。
 
-## Layout
+- **系统监控页：**显示 CPU 总体与各核心负载、最近两分钟的曲线、内存占用与内存压力、压缩内存、交换空间活动，以及占用资源较多的进程。
+- **AI 用量页：**显示 Claude Code 与 Codex 的五小时和每周用量、重置倒计时与数据更新时间。点按 **REFRESH** 可手动刷新；横向滑动切换页面，点按屏幕可切换背光亮度。
+- **本地运行：**Mac 用 Swift 采集系统指标，Node.js 提供局域网数据接口；ESP32 通过 Wi-Fi 每秒读取一次数据并绘制屏幕。Claude Code 凭据从 macOS 钥匙串读取，Codex 用量通过本机 Codex CLI 获取，凭据不写入项目源码。
 
-- `firmware-idf/`: current ESP-IDF firmware, including display and touch components and pinned component dependencies. The Wi-Fi and Mac settings live in the device's NVS, outside the firmware source.
-- `mac/`: Swift sampler, Node server, web status page, serial configuration utility, and optional LaunchAgent installer.
-- `firmware/sysmon/`: older Arduino sketch and board support sources, retained for reference. For the two-page display, build `firmware-idf/`.
+### 项目结构
 
-Build outputs, compiled binaries, generated SDK configuration, device flash backups, local LaunchAgent files, and account credentials are excluded.
+| 路径 | 说明 |
+| --- | --- |
+| `firmware-idf/` | 当前使用的 ESP-IDF 双页面固件、屏幕与触摸驱动。 |
+| `mac/` | Swift 系统采集器、Node 服务、浏览器状态页、串口配置工具和登录自启脚本。 |
+| `firmware/sysmon/` | 早期 Arduino 版本及配套板级源码，留作参考；双页面功能请使用 `firmware-idf/`。 |
 
-## Build and run
+### 硬件与环境
 
-Prerequisites: macOS with Swift (`swiftc`) and Node.js 18+; Espressif ESP-IDF 5.5.x with `idf.py` for the firmware. Dependencies in `firmware-idf/main/idf_component.yml` are downloaded by the ESP-IDF component manager. The board needs 16 MB flash and octal PSRAM, as specified in `sdkconfig.defaults`.
+- Waveshare ESP32-S3-Touch-LCD-4.3C，16 MB Flash、Octal PSRAM；Mac 与屏幕连接同一可互通的局域网。
+- Mac 安装 Node.js 18+、Swift 编译器；编译固件需安装 ESP-IDF 5.5.x。ESP-IDF 依赖按 `firmware-idf/dependencies.lock` 下载。
+- AI 用量需要 Mac 上已经登录 Claude Code，以及用 `~/.codex-usage` 作为账号目录登录的 Codex CLI。Claude Code 用量接口并非公开稳定 API，受限流时会显示错误并保留上次成功获取的数值。
+
+### 开始使用
+
+在仓库根目录编译并刷入当前固件；将端口替换为实际的 `/dev/cu.usbmodem*` 设备：
 
 ```sh
 cd firmware-idf
 idf.py set-target esp32s3
 idf.py build
 idf.py -p /dev/cu.usbmodemXXXX flash monitor
+cd ..
 ```
 
-Replace the port with the one found by `arduino-cli board list` or `ls /dev/cu.usbmodem*`. Flashing changes device firmware; existing Wi-Fi settings are in NVS and the partition layout in `partitions.csv` preserves their location.
-
-In another terminal, start the Mac collector:
+在 Mac 上启动数据服务，然后通过 USB 串口把 Wi-Fi 和 Mac 地址写入设备：
 
 ```sh
 node mac/server.mjs
-```
-
-It builds `mac/sampler` with `swiftc` as needed and serves a browser page at `http://localhost:8787/`. To start it automatically on login, run `node mac/install-agent.mjs`. The server binds to the local network; use it on a trusted LAN.
-
-With the ESP32 connected over USB, configure its Wi-Fi and Mac address once:
-
-```sh
+# 在另一个终端运行：
 node mac/configure.mjs
 node mac/configure.mjs status
 ```
 
-The status command reports network connection, resolved host, and last request result. On the display, swipe horizontally between the two pages; tap **REFRESH** on the AI usage page to request updated usage. The collector needs a signed-in Codex CLI with its account in `~/.codex-usage` and a Claude Code credential in the macOS Keychain for both usage sections to populate.
+浏览器状态页位于 `http://localhost:8787/`；需要登录时自动启动服务，可运行 `node mac/install-agent.mjs`。服务监听局域网地址，适合在可信网络内使用。Wi-Fi 密码和主机配置存于设备 NVS，不在仓库中；编译文件、闪存备份和凭据也未纳入版本控制。驱动与字体中包含 Waveshare、Espressif 和 STMicroelectronics 的代码，保留了原有版权声明；本仓库没有为这些第三方文件统一重新授权。
+
+## English
+
+**Sysmon** is a small desk display for the Waveshare ESP32-S3-Touch-LCD-4.3C. It puts Mac performance and AI coding subscription usage on two touch-screen pages, so you can check both at a glance.
+
+- **System page:** overall and per-core CPU load, a two-minute chart, memory usage and pressure, compressed memory, swap activity, and resource-heavy processes.
+- **AI usage page:** Claude Code and Codex usage for the five-hour and weekly windows, reset countdowns, and data age. Tap **REFRESH** to update usage, swipe horizontally to switch pages, or tap the screen to cycle backlight brightness.
+- **Local data flow:** a Swift sampler gathers Mac metrics, a Node.js server exposes them on the LAN, and the ESP32 reads and draws the data once a second over Wi-Fi. Claude Code credentials are read from macOS Keychain; Codex usage comes from the local Codex CLI. Credentials are never embedded in the source.
+
+### Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `firmware-idf/` | Current two-page ESP-IDF firmware and display/touch components. |
+| `mac/` | Swift sampler, Node server, browser status page, serial configurator, and login agent installer. |
+| `firmware/sysmon/` | Earlier Arduino version and board sources for reference; build `firmware-idf/` for both pages. |
+
+### Requirements
+
+- A Waveshare ESP32-S3-Touch-LCD-4.3C with 16 MB flash and octal PSRAM; the Mac and display must share a reachable LAN.
+- macOS with Node.js 18+ and the Swift compiler; ESP-IDF 5.5.x for firmware builds. ESP-IDF downloads the dependencies pinned in `firmware-idf/dependencies.lock`.
+- For AI usage, a signed-in Claude Code installation and a signed-in Codex CLI using `~/.codex-usage` as its account directory. The Claude Code usage endpoint is undocumented and may rate-limit requests; on error the previous successful values remain visible with an error indicator.
+
+### Getting started
+
+From the repository root, build and flash the current firmware. Replace the serial port with your actual `/dev/cu.usbmodem*` device:
+
+```sh
+cd firmware-idf
+idf.py set-target esp32s3
+idf.py build
+idf.py -p /dev/cu.usbmodemXXXX flash monitor
+cd ..
+```
+
+Start the Mac server, then write Wi-Fi and Mac host settings to the ESP32 over USB serial:
+
+```sh
+node mac/server.mjs
+# Run these in a second terminal:
+node mac/configure.mjs
+node mac/configure.mjs status
+```
+
+The browser status page is at `http://localhost:8787/`. Run `node mac/install-agent.mjs` to start the server automatically at login. The server listens on the LAN; use it on a trusted network. Wi-Fi passwords and host settings live in device NVS, outside this repository. Build artifacts, flash backups, and credentials are also excluded. Display drivers and fonts include upstream work from Waveshare, Espressif, and STMicroelectronics with their original notices retained; this repository does not apply one blanket license to those third-party files.
