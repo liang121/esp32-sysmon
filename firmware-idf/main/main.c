@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
@@ -28,6 +29,7 @@
 
 #include "rgb_lcd_port.h"
 #include "ui.h"
+#include "wifi_policy.h"
 #include "gt911.h"
 #include "io_extension.h"
 
@@ -37,6 +39,7 @@ static uint32_t millis(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static char cfg_ssid[2][33], cfg_pass[2][65], cfg_host[64];
 static uint16_t cfg_port = 8787;
 static int n_nets = 0, net_idx = 0;
+static int saved_net_in_nvs = -1;
 
 static void nvs_get_s(nvs_handle_t h, const char *k, char *out, size_t n) {
   size_t len = n; if (nvs_get_str(h, k, out, &len) != ESP_OK) out[0] = 0;
@@ -48,7 +51,7 @@ static void load_cfg(void) {
   nvs_get_s(h, "ssid2", cfg_ssid[1], sizeof cfg_ssid[1]); nvs_get_s(h, "pass2", cfg_pass[1], sizeof cfg_pass[1]);
   nvs_get_s(h, "host", cfg_host, sizeof cfg_host);
   nvs_get_u16(h, "port", &cfg_port);
-  uint8_t last = 0; nvs_get_u8(h, "lastnet", &last); net_idx = last;
+  uint8_t last = 0; nvs_get_u8(h, "lastnet", &last); net_idx = saved_net_in_nvs = last;
   nvs_close(h);
   n_nets = cfg_ssid[0][0] ? (cfg_ssid[1][0] ? 2 : 1) : 0;
   if (net_idx >= n_nets) net_idx = 0;
@@ -61,33 +64,68 @@ static uint32_t last_ok_ms = 0, conn_start_ms = 0;
 static char last_err[40] = "starting";
 static volatile bool wifi_up = false;
 static char my_ip[16] = "0.0.0.0", host_ip[16] = "";
+static uint32_t last_resolve_ms;
+static ui_wifi_view_t wifi_view;
+typedef enum { NET_DISCONNECTED, NET_GOT_IP, NET_SCAN_DONE } net_event_kind_t;
+typedef struct { net_event_kind_t kind; uint8_t reason; esp_ip4_addr_t ip; } net_event_t;
+static QueueHandle_t net_events;
+static esp_netif_t *wifi_netif;
+typedef enum { CANDIDATE_NONE, CANDIDATE_WAIT_DISCONNECT, CANDIDATE_CONNECTING,
+               CANDIDATE_ROLLBACK_WAIT } candidate_phase_t;
+static candidate_phase_t candidate_phase;
+static char candidate_ssid[33], candidate_pass[65];
+static bool scan_busy, retry_pending, saved_connecting, candidate_timeout_issued;
+static uint32_t retry_at_ms;
+static unsigned wifi_failures;
 static const uint8_t BRIGHT[] = {0, 40, 75};  // PWM duty: 0 = full brightness (inverted)
 static int bright_idx = 0;
 
 // ---------------- network ----------------
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
+  net_event_t event = {0};
   if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-    wifi_up = false;
+    event.kind = NET_DISCONNECTED;
+    event.reason = ((wifi_event_sta_disconnected_t *)data)->reason;
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-    ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
-    snprintf(my_ip, sizeof my_ip, IPSTR, IP2STR(&e->ip_info.ip));
-    wifi_up = true;
-  }
+    event.kind = NET_GOT_IP;
+    event.ip = ((ip_event_got_ip_t *)data)->ip_info.ip;
+  } else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) event.kind = NET_SCAN_DONE;
+  else return;
+  if (net_events && xQueueSend(net_events, &event, 0) != pdTRUE)
+    ESP_LOGW("sysmon", "network event queue full");
 }
+
+static void show_wifi_state(const char *message, bool busy) {
+  strlcpy(wifi_view.message, message, sizeof wifi_view.message);
+  wifi_view.connected = wifi_up;
+  wifi_view.busy = busy;
+  wifi_view.connected_ssid[0] = 0;
+  if (wifi_up) {
+    wifi_ap_record_t ap = {0};
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK)
+      memcpy(wifi_view.connected_ssid, ap.ssid, sizeof wifi_view.connected_ssid - 1);
+  }
+  ui_wifi_present(&wifi_view);
+}
+
 static void connect_net(int i) {
   net_idx = i; conn_start_ms = millis(); host_ip[0] = 0; wifi_up = false;
-  esp_wifi_disconnect();
+  saved_connecting = true;
   wifi_config_t wc = {0};
-  strlcpy((char *)wc.sta.ssid, cfg_ssid[i], sizeof wc.sta.ssid);
+  wifi_copy_ssid(wc.sta.ssid, cfg_ssid[i]);
   strlcpy((char *)wc.sta.password, cfg_pass[i], sizeof wc.sta.password);
   esp_wifi_set_config(WIFI_IF_STA, &wc);
   esp_wifi_connect();
   snprintf(last_err, sizeof last_err, "joining %s", cfg_ssid[i]);
+  show_wifi_state("Connecting to saved Wi-Fi...", true);
 }
 static void wifi_start(void) {
+  net_events = xQueueCreate(16, sizeof(net_event_t));
+  ESP_ERROR_CHECK(net_events ? ESP_OK : ESP_ERR_NO_MEM);
   esp_netif_init();
   esp_event_loop_create_default();
-  esp_netif_create_default_wifi_sta();
+  wifi_netif = esp_netif_create_default_wifi_sta();
+  ESP_ERROR_CHECK(wifi_netif ? ESP_OK : ESP_ERR_NO_MEM);
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   esp_wifi_init(&cfg);
   esp_wifi_set_storage(WIFI_STORAGE_RAM);  // no flash writes on (re)connect
@@ -98,11 +136,188 @@ static void wifi_start(void) {
   esp_wifi_set_ps(WIFI_PS_NONE);
   mdns_init();
   mdns_hostname_set("sysmon");
-  connect_net(net_idx);
+  if (n_nets) connect_net(net_idx);
+  else show_wifi_state("No saved Wi-Fi. Tap SCAN.", false);
 }
+
+static void clear_candidate(void) {
+  candidate_phase = CANDIDATE_NONE;
+  candidate_timeout_issued = false;
+  memset(candidate_pass, 0, sizeof candidate_pass);
+  memset(candidate_ssid, 0, sizeof candidate_ssid);
+}
+
+static void rollback_candidate(const char *reason) {
+  clear_candidate();
+  retry_pending = false;
+  strlcpy(last_err, reason, sizeof last_err);
+  if (wifi_up) {
+    candidate_phase = CANDIDATE_ROLLBACK_WAIT;
+    if (esp_wifi_disconnect() == ESP_OK) {
+      show_wifi_state(reason, true);
+      return;
+    }
+    candidate_phase = CANDIDATE_NONE;
+  }
+  if (n_nets) connect_net(net_idx);
+  show_wifi_state(reason, n_nets > 0);
+}
+
+static void apply_candidate(void) {
+  wifi_config_t wc = {0};
+  wifi_copy_ssid(wc.sta.ssid, candidate_ssid);
+  strlcpy((char *)wc.sta.password, candidate_pass, sizeof wc.sta.password);
+  candidate_phase = CANDIDATE_CONNECTING;
+  candidate_timeout_issued = false;
+  conn_start_ms = millis();
+  wifi_up = false;
+  host_ip[0] = 0;
+  esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &wc);
+  if (err == ESP_OK) err = esp_wifi_connect();
+  memset(&wc, 0, sizeof wc);
+  if (err != ESP_OK) { rollback_candidate("Wi-Fi connection failed"); return; }
+  show_wifi_state("Connecting to selected Wi-Fi...", true);
+}
+
+static bool save_candidate(void) {
+  char ssids[2][33], passwords[2][65];
+  memcpy(ssids, cfg_ssid, sizeof ssids);
+  memcpy(passwords, cfg_pass, sizeof passwords);
+  int count = n_nets;
+  wifi_promote(ssids, passwords, &count, candidate_ssid, candidate_pass);
+  nvs_handle_t h;
+  esp_err_t err = nvs_open("sysmon", NVS_READWRITE, &h);
+  if (err == ESP_OK) {
+    err = nvs_set_str(h, "ssid", ssids[0]);
+    if (err == ESP_OK) err = nvs_set_str(h, "pass", passwords[0]);
+    if (err == ESP_OK) err = nvs_set_str(h, "ssid2", count > 1 ? ssids[1] : "");
+    if (err == ESP_OK) err = nvs_set_str(h, "pass2", count > 1 ? passwords[1] : "");
+    if (err == ESP_OK) err = nvs_set_u8(h, "lastnet", 0);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+  }
+  if (err == ESP_OK) {
+    memcpy(cfg_ssid, ssids, sizeof cfg_ssid);
+    memcpy(cfg_pass, passwords, sizeof cfg_pass);
+    n_nets = count;
+    net_idx = saved_net_in_nvs = 0;
+  }
+  memset(passwords, 0, sizeof passwords);
+  return err == ESP_OK;
+}
+
+static void start_candidate(const ui_wifi_request_t *request) {
+  size_t pass_len = strnlen(request->password, sizeof request->password);
+  if (!request->ssid_len || request->ssid_len > 32 ||
+      (!request->open && (pass_len < 8 || pass_len > 63))) {
+    show_wifi_state("Password must have 8-63 characters", false);
+    return;
+  }
+  memcpy(candidate_ssid, request->ssid, request->ssid_len);
+  candidate_ssid[request->ssid_len] = 0;
+  strlcpy(candidate_pass, request->password, sizeof candidate_pass);
+  retry_pending = false;
+  saved_connecting = false;
+  if (n_nets) {
+    candidate_phase = CANDIDATE_WAIT_DISCONNECT;
+    if (esp_wifi_disconnect() == ESP_OK) {
+      show_wifi_state("Changing Wi-Fi...", true);
+      return;
+    }
+  }
+  apply_candidate();
+}
+
+static void receive_scan(void) {
+  uint16_t count = UI_WIFI_MAX_APS;
+  wifi_ap_record_t records[UI_WIFI_MAX_APS] = {0};
+  esp_err_t err = esp_wifi_scan_get_ap_records(&count, records);
+  wifi_view.ap_count = 0;
+  if (err == ESP_OK) {
+    for (uint16_t i = 0; i < count; ++i) {
+      ui_wifi_ap_t *ap = &wifi_view.aps[wifi_view.ap_count++];
+      ap->ssid_len = strnlen((char *)records[i].ssid, 32);
+      memcpy(ap->ssid, records[i].ssid, ap->ssid_len);
+      ap->ssid[ap->ssid_len] = 0;
+      ap->open = records[i].authmode == WIFI_AUTH_OPEN;
+    }
+  }
+  scan_busy = false;
+  show_wifi_state(err != ESP_OK ? "Wi-Fi scan failed" : count ? "Choose a network" : "No networks found", false);
+}
+
+static void handle_network_event(const net_event_t *event) {
+  if (event->kind == NET_SCAN_DONE) { receive_scan(); return; }
+  if (event->kind == NET_DISCONNECTED) {
+    wifi_up = false;
+    host_ip[0] = 0;
+    saved_connecting = false;
+    if (candidate_phase == CANDIDATE_WAIT_DISCONNECT) { apply_candidate(); return; }
+    if (candidate_phase == CANDIDATE_ROLLBACK_WAIT) {
+      candidate_phase = CANDIDATE_NONE;
+      if (n_nets) connect_net(net_idx);
+      return;
+    }
+    if (candidate_phase == CANDIDATE_CONNECTING) {
+      rollback_candidate(event->reason == WIFI_REASON_AUTH_FAIL ? "Wrong Wi-Fi password" : "Wi-Fi connection failed");
+      return;
+    }
+    strlcpy(last_err, "wifi disconnected", sizeof last_err);
+    wifi_failures++;
+    retry_pending = n_nets > 0;
+    retry_at_ms = millis() + 3000; // failure backoff, not event ordering
+    show_wifi_state("Wi-Fi disconnected", scan_busy);
+    return;
+  }
+  if (event->kind == NET_GOT_IP) {
+    if (candidate_phase == CANDIDATE_WAIT_DISCONNECT ||
+        candidate_phase == CANDIDATE_ROLLBACK_WAIT || candidate_timeout_issued) return;
+    wifi_ap_record_t ap = {0};
+    esp_netif_ip_info_t ip_info = {0};
+    const char *expected_ssid = candidate_phase == CANDIDATE_CONNECTING
+                                    ? candidate_ssid : n_nets ? cfg_ssid[net_idx] : "";
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK ||
+        esp_netif_get_ip_info(wifi_netif, &ip_info) != ESP_OK ||
+        !wifi_got_ip_matches(expected_ssid, ap.ssid, event->ip.addr, ip_info.ip.addr)) return;
+    snprintf(my_ip, sizeof my_ip, IPSTR, IP2STR(&event->ip));
+    wifi_up = true;
+    wifi_failures = 0;
+    saved_connecting = false;
+    retry_pending = false;
+    if (candidate_phase == CANDIDATE_CONNECTING) {
+      if (!save_candidate()) { rollback_candidate("Could not save Wi-Fi"); return; }
+      clear_candidate();
+    } else if (saved_net_in_nvs != net_idx && n_nets) {
+      nvs_handle_t h;
+      if (nvs_open("sysmon", NVS_READWRITE, &h) == ESP_OK) {
+        if (nvs_set_u8(h, "lastnet", net_idx) == ESP_OK && nvs_commit(h) == ESP_OK)
+          saved_net_in_nvs = net_idx;
+        nvs_close(h);
+      }
+    }
+    show_wifi_state("Wi-Fi connected", scan_busy);
+  }
+}
+
+static void handle_wifi_request(ui_wifi_request_t *request) {
+  if (request->kind == UI_WIFI_SCAN && !scan_busy && candidate_phase == CANDIDATE_NONE) {
+    scan_busy = true;
+    show_wifi_state("Scanning...", true);
+    esp_err_t err = esp_wifi_scan_start(NULL, false);
+    if (err != ESP_OK) {
+      scan_busy = false;
+      show_wifi_state("Wi-Fi scan failed", false);
+    }
+  } else if (request->kind == UI_WIFI_CONNECT && !scan_busy && candidate_phase == CANDIDATE_NONE) {
+    start_candidate(request);
+  }
+  memset(request->password, 0, sizeof request->password);
+}
+
 static bool resolve_host(void) {
   struct in_addr a;
   if (inet_aton(cfg_host, &a)) { strlcpy(host_ip, cfg_host, sizeof host_ip); return true; }
+  last_resolve_ms = millis();
   char h[64]; strlcpy(h, cfg_host, sizeof h);
   char *dot = strstr(h, ".local"); if (dot) *dot = 0;
   esp_ip4_addr_t addr = {0};
@@ -130,7 +345,9 @@ static bool fetch(void) {
   esp_http_client_cleanup(c);
   if (err != ESP_OK || code != 200) {
     snprintf(last_err, sizeof last_err, "http %s", err != ESP_OK ? esp_err_to_name(err) : "status");
-    if (err != ESP_OK) host_ip[0] = 0;  // re-resolve next time (Mac IP may have changed)
+    // Keep trying the last working IP while refreshing mDNS. A transient mDNS
+    // failure during a Mac service outage must not erase the working address.
+    if (host_ip[0] && millis() - last_resolve_ms >= 5000) resolve_host();
     return false;
   }
   body[body_len] = 0;
@@ -235,11 +452,34 @@ void app_main(void) {
   for (int k = 0; k < 2; k++) { ai[k].h5 = ai[k].wk = ai[k].h5r = ai[k].wkr = ai[k].age = -1; strlcpy(ai[k].err, "waiting", sizeof ai[k].err); }
   load_cfg();
   xTaskCreate(console_task, "console", 4096, NULL, 3, NULL);
-  if (n_nets) wifi_start(); else snprintf(last_err, sizeof last_err, "no wifi config");
+  wifi_start();
+  if (!n_nets) snprintf(last_err, sizeof last_err, "no wifi config");
   ui_present(&st, ai, false, last_err);
 
-  uint32_t next_fetch = 0; int saved_net = -1;
+  uint32_t next_fetch = 0;
   for (;;) {
+    net_event_t event;
+    while (xQueueReceive(net_events, &event, 0) == pdTRUE) handle_network_event(&event);
+    ui_wifi_request_t request;
+    while (ui_take_wifi_request(&request)) handle_wifi_request(&request);
+    if (candidate_phase == CANDIDATE_CONNECTING && !candidate_timeout_issued &&
+        millis() - conn_start_ms > 20000) {
+      candidate_timeout_issued = true;
+      if (esp_wifi_disconnect() != ESP_OK) rollback_candidate("Wi-Fi connection timed out");
+    }
+    if (saved_connecting && millis() - conn_start_ms > 15000) {
+      saved_connecting = false;
+      if (esp_wifi_disconnect() != ESP_OK) {
+        retry_pending = true;
+        retry_at_ms = millis() + 3000;
+      }
+    }
+    if (retry_pending && !saved_connecting && !scan_busy && candidate_phase == CANDIDATE_NONE &&
+        (int32_t)(millis() - retry_at_ms) >= 0) {
+      retry_pending = false;
+      int next = wifi_next_network(n_nets, net_idx, wifi_up, wifi_failures);
+      if (next >= 0) connect_net(next);
+    }
     if (ui_take_brightness_request()) {
       bright_idx = (bright_idx + 1) % sizeof BRIGHT;
       IO_EXTENSION_Pwm_Output(BRIGHT[bright_idx]);
@@ -249,17 +489,7 @@ void app_main(void) {
     if ((int32_t)(millis() - next_fetch) >= 0) {
       next_fetch = millis() + 1000;
       if (n_nets) {
-        // A network can be joinable yet unable to reach the Mac (guest / isolated SSID):
-        // fall over to the other one if we can't connect in 15 s or get no data for 30 s.
-        uint32_t since = millis() - (last_ok_ms > conn_start_ms ? last_ok_ms : conn_start_ms);
-        if ((!wifi_up && millis() - conn_start_ms > 15000) || (wifi_up && n_nets > 1 && since > 30000))
-          connect_net((net_idx + 1) % n_nets);
-        else if (!wifi_up && millis() - conn_start_ms > 5000 && n_nets == 1)
-          connect_net(0);
-        if (fetch() && saved_net != net_idx) {
-          nvs_handle_t h; if (nvs_open("sysmon", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "lastnet", net_idx); nvs_commit(h); nvs_close(h); }
-          saved_net = net_idx;
-        }
+        fetch();
       }
       ui_present(&st, ai, st.valid && millis() - last_ok_ms < 5000, last_err);
     }

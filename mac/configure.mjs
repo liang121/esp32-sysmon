@@ -1,6 +1,7 @@
 // Write Wi-Fi + Mac host config into the ESP32 over USB serial.
 // Usage: node configure.mjs          (prompts; password input is hidden)
 //        node configure.mjs status   (just print device status)
+//        node configure.mjs host     (set this Mac's .local name without changing Wi-Fi)
 import { execFileSync } from 'node:child_process';
 import { readdirSync, openSync, readSync, writeSync, closeSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -32,6 +33,12 @@ async function ask(q, { hidden = false, def = '' } = {}) {
 if (process.argv[2] === 'status') { console.log(send('status')); closeSync(fd); process.exit(0); }
 
 const host = execFileSync('scutil', ['--get', 'LocalHostName']).toString().trim() + '.local';
+if (process.argv[2] === 'host') {
+  console.log('host →', send(`set host ${host}`));
+  console.log(send('reboot'));
+  closeSync(fd);
+  process.exit(0);
+}
 const ssid = await ask('Wi-Fi 名称 (SSID): ');
 const pass = await ask('Wi-Fi 密码 (输入不显示): ', { hidden: true });
 const h = await ask(`Mac 地址 [${host}]: `, { def: host });

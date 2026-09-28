@@ -53,16 +53,20 @@ idf.py -p /dev/cu.usbmodemXXXX flash monitor
 cd ..
 ```
 
-在 Mac 上启动数据服务，然后通过 USB 串口把 Wi-Fi 和 Mac 地址写入设备：
+在 Mac 上启动数据服务。设备的 **APPS → Wi-Fi** 可扫描网络并用触屏键盘输入密码；新网络取得 IP 后才会保存，连接失败会保留旧配置。Mac 地址仍通过 USB 串口设置一次，建议使用 Mac 的 `.local` 名称而不是可能变化的数字 IP：
 
 ```sh
 node mac/server.mjs
 # 在另一个终端运行：
 node mac/configure.mjs
 node mac/configure.mjs status
+# 若设备以前保存的是数字 IP，只更新 Mac 名称而不改 Wi-Fi：
+node mac/configure.mjs host
 ```
 
 浏览器状态页位于 `http://localhost:8787/`；需要登录时自动启动服务，可运行 `node mac/install-agent.mjs`。服务监听局域网地址，适合在可信网络内使用。Wi-Fi 密码和主机配置存于设备 NVS，不在仓库中；编译文件、闪存备份和凭据也未纳入版本控制。驱动与字体中包含 Waveshare、Espressif 和 STMicroelectronics 的代码，保留了原有版权声明；本仓库没有为这些第三方文件统一重新授权。
+
+Wi-Fi 页只显示网络名称与是否需要密码，不显示信号强弱。Monitor 保留原图标与操作。设备通过 `.local` 名称重新寻找 Mac；Mac 服务暂时不可用时会留在当前 Wi-Fi，不再因此切到另一个网络。Mac 与设备需要处在允许 mDNS 互通的网络中；即使 IP 在同一网段，不同 Wi-Fi 名称之间也可能屏蔽 mDNS。
 
 如需退回以前的手绘界面，在单独的干净 checkout 中检出提交 `b6fb190`，按上述命令重新编译、刷机。刷写应用时不要擦除 NVS，以保留设备的 Wi-Fi 设置。
 
@@ -101,15 +105,19 @@ idf.py -p /dev/cu.usbmodemXXXX flash monitor
 cd ..
 ```
 
-Start the Mac server, then write Wi-Fi and Mac host settings to the ESP32 over USB serial:
+Start the Mac server. Use **APPS → Wi-Fi** on the device to scan and join a network with its touch keyboard; new credentials are saved only after an IP address is acquired. Configure the Mac host once over USB serial, preferably with its `.local` name rather than a numeric IP that can change:
 
 ```sh
 node mac/server.mjs
 # Run these in a second terminal:
 node mac/configure.mjs
 node mac/configure.mjs status
+# If the device still has a numeric Mac IP, update only its host:
+node mac/configure.mjs host
 ```
 
 The browser status page is at `http://localhost:8787/`. Run `node mac/install-agent.mjs` to start the server automatically at login. The server listens on the LAN; use it on a trusted network. Wi-Fi passwords and host settings live in device NVS, outside this repository. Build artifacts, flash backups, and credentials are also excluded. Display drivers and fonts include upstream work from Waveshare, Espressif, and STMicroelectronics with their original notices retained; this repository does not apply one blanket license to those third-party files.
+
+The Wi-Fi page shows network names and password requirements without signal-strength indicators. The Monitor icon and controls are unchanged. The device re-resolves the Mac's `.local` name after a failed request and stays on the current Wi-Fi while the Mac service is unavailable. The LAN must allow device-to-Mac traffic and mDNS discovery; different Wi-Fi names may isolate mDNS even when their IP addresses share a subnet.
 
 To restore the earlier hand-drawn UI, check out commit `b6fb190` in a separate clean checkout, then rebuild and flash using the commands above. Do not erase NVS when flashing the app; it stores the device's Wi-Fi settings.

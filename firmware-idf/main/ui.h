@@ -15,7 +15,32 @@ typedef struct {
 
 typedef struct { int h5, h5r, wk, wkr, age, busy; char plan[12], err[41]; } ai_t;
 
+#define UI_WIFI_MAX_APS 12
+typedef enum { UI_WIFI_SCAN, UI_WIFI_CONNECT } ui_wifi_request_kind_t;
+typedef struct {
+  ui_wifi_request_kind_t kind;
+  uint8_t ssid[33];
+  uint8_t ssid_len;
+  bool open;
+  char password[65];
+} ui_wifi_request_t;
+typedef struct {
+  uint8_t ssid[33];
+  uint8_t ssid_len;
+  bool open;
+} ui_wifi_ap_t;
+typedef struct {
+  char connected_ssid[33];
+  char message[80];
+  bool connected;
+  bool busy;
+  uint8_t ap_count;
+  ui_wifi_ap_t aps[UI_WIFI_MAX_APS];
+} ui_wifi_view_t;
+
 void ui_init(esp_lcd_panel_handle_t panel);
 void ui_present(const stats_t *stats, const ai_t ai[2], bool mac_online, const char *last_error);
 bool ui_take_refresh_request(void);
 bool ui_take_brightness_request(void);
+bool ui_take_wifi_request(ui_wifi_request_t *out);
+void ui_wifi_present(const ui_wifi_view_t *view);
