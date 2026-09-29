@@ -406,6 +406,15 @@ static void request_ai_refresh(void) {
 }
 
 // ---------------- serial config console ----------------
+static uint32_t screenshot_crc32(const uint8_t *data, size_t size) {
+  uint32_t crc = 0xffffffff;
+  for (size_t i = 0; i < size; i++) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  }
+  return crc ^ 0xffffffff;
+}
+
 static void console_task(void *arg) {
   char l[256];
   for (;;) {
@@ -422,6 +431,28 @@ static void console_task(void *arg) {
       else { nvs_close(h); printf("ERR unknown key\n"); continue; }
       nvs_commit(h); nvs_close(h);
       printf(e == ESP_OK ? "OK %s\n" : "ERR %s\n", k);
+    } else if (!strcmp(l, "screenshot")) {
+      uint8_t *pixels = NULL;
+      size_t size = 0;
+      if (!ui_capture_rgb565(&pixels, &size)) {
+        printf("ERR screenshot unavailable\n");
+        continue;
+      }
+      printf("FRAME RGB565 %u %u %zu %08x\n", EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES,
+             size, (unsigned)screenshot_crc32(pixels, size));
+      fflush(stdout);
+      // The console VFS translates LF and sends one byte at a time. Raw frames
+      // must bypass it, or the bytes (and checksum) change in transit.
+      size_t sent = 0;
+      while (sent < size) {
+        size_t chunk = size - sent > 1024 ? 1024 : size - sent;
+        int written = usb_serial_jtag_write_bytes(pixels + sent, chunk, portMAX_DELAY);
+        if (written <= 0) break;
+        sent += written;
+      }
+      usb_serial_jtag_wait_tx_done(portMAX_DELAY);
+      free(pixels);
+      if (sent == size) printf("\nEND FRAME\n");
     } else if (!strcmp(l, "status")) {
       wifi_ap_record_t ap = {0}; esp_wifi_sta_get_ap_info(&ap);
       printf("ssid=%s ssid2=%s connected=%s host=%s port=%u wifi=%d ip=%s hostIp=%s last=%s\n",
@@ -439,6 +470,7 @@ void app_main(void) {
   if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) { nvs_flash_erase(); nvs_flash_init(); }
 
   usb_serial_jtag_driver_config_t uc = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+  uc.tx_buffer_size = 4096;
   usb_serial_jtag_driver_install(&uc);
   usb_serial_jtag_vfs_use_driver();
   setvbuf(stdin, NULL, _IONBF, 0);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_lcd_panel_ops.h"
 
@@ -39,6 +40,8 @@ typedef struct {
 } ui_wifi_view_t;
 
 void ui_init(esp_lcd_panel_handle_t panel);
+// Caller owns *pixels and must free it. Captures the last displayed RGB565 frame.
+bool ui_capture_rgb565(uint8_t **pixels, size_t *size);
 void ui_present(const stats_t *stats, const ai_t ai[2], bool mac_online, const char *last_error);
 bool ui_take_refresh_request(void);
 bool ui_take_brightness_request(void);

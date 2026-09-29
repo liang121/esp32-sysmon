@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esp_check.h"
@@ -31,6 +32,7 @@ static lv_obj_t *usage_bar[2][2], *usage_pct[2][2], *usage_reset[2][2];
 static lv_obj_t *wifi_current, *wifi_message, *wifi_rows[UI_WIFI_MAX_APS], *wifi_names[UI_WIFI_MAX_APS];
 static lv_obj_t *wifi_security[UI_WIFI_MAX_APS], *wifi_password_panel, *wifi_password, *wifi_keyboard;
 static lv_obj_t *wifi_password_title;
+static esp_lcd_panel_handle_t ui_panel;
 static ui_wifi_view_t wifi_view;
 static QueueHandle_t wifi_requests;
 static uint8_t selected_ap;
@@ -416,6 +418,7 @@ static void read_touch(lv_indev_t *indev, lv_indev_data_t *data) {
 }
 
 void ui_init(esp_lcd_panel_handle_t panel) {
+    ui_panel = panel;
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_ERROR_CHECK(lvgl_port_init(&port_cfg));
     const lvgl_port_display_cfg_t display_cfg = {
@@ -440,6 +443,34 @@ void ui_init(esp_lcd_panel_handle_t panel) {
     lv_indev_set_display(input, display);
     enter(0);
     lvgl_port_unlock();
+}
+
+bool ui_capture_rgb565(uint8_t **pixels, size_t *size) {
+    if (!pixels || !size) return false;
+    *pixels = NULL;
+    *size = 0;
+    if (!lvgl_port_lock(0)) return false;
+
+    lv_display_t *display = lv_display_get_default();
+    lv_draw_buf_t *active = display ? lv_display_get_buf_active(display) : NULL;
+    void *first = NULL, *second = NULL;
+    const uint8_t *shown = NULL;
+    if (active && lv_display_get_color_format(display) == LV_COLOR_FORMAT_RGB565 &&
+        esp_lcd_rgb_panel_get_frame_buffer(ui_panel, 2, &first, &second) == ESP_OK) {
+        // Full-refresh LVGL swaps draw buffers after the flush. The other panel
+        // framebuffer is therefore the frame last handed to the RGB panel.
+        if (active->data == first) shown = second;
+        else if (active->data == second) shown = first;
+    }
+    const size_t bytes = EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * 2;
+    uint8_t *copy = shown ? heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    if (copy) memcpy(copy, shown, bytes);
+    lvgl_port_unlock();
+
+    if (!copy) return false;
+    *pixels = copy;
+    *size = bytes;
+    return true;
 }
 
 bool ui_take_wifi_request(ui_wifi_request_t *out) {
