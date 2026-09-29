@@ -24,6 +24,10 @@ CONFIG_LV_FONT_MONTSERRAT_32=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_FONT_SOURCE_HAN_SANS_SC_16_CJK=y
 
+# Large TCP segments to this board were lost on the current LAN; advertise a
+# conservative segment size so Mac HTTP responses can be acknowledged.
+CONFIG_LWIP_TCP_MSS=576
+
 # Console + config commands over the built-in USB port
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
