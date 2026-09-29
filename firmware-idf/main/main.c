@@ -229,21 +229,40 @@ static void start_candidate(const ui_wifi_request_t *request) {
 }
 
 static void receive_scan(void) {
-  uint16_t count = UI_WIFI_MAX_APS;
-  wifi_ap_record_t records[UI_WIFI_MAX_APS] = {0};
-  esp_err_t err = esp_wifi_scan_get_ap_records(&count, records);
+  uint16_t count = 0;
+  esp_err_t err = esp_wifi_scan_get_ap_num(&count);
   wifi_view.ap_count = 0;
   if (err == ESP_OK) {
-    for (uint16_t i = 0; i < count; ++i) {
-      ui_wifi_ap_t *ap = &wifi_view.aps[wifi_view.ap_count++];
-      ap->ssid_len = strnlen((char *)records[i].ssid, 32);
-      memcpy(ap->ssid, records[i].ssid, ap->ssid_len);
-      ap->ssid[ap->ssid_len] = 0;
-      ap->open = records[i].authmode == WIFI_AUTH_OPEN;
+    if (count > 64) count = 64;
+    wifi_ap_record_t *records = count ? malloc(count * sizeof *records) : NULL;
+    if (count && !records) err = ESP_ERR_NO_MEM;
+    if (err == ESP_OK && count) err = esp_wifi_scan_get_ap_records(&count, records);
+    if (err == ESP_OK) {
+      for (uint16_t i = 0; i < count && wifi_view.ap_count < UI_WIFI_MAX_APS; ++i) {
+        uint8_t len = strnlen((char *)records[i].ssid, 32);
+        if (!len) continue; // Hidden networks have no selectable name.
+        bool open = records[i].authmode == WIFI_AUTH_OPEN;
+        bool duplicate = false;
+        for (uint8_t j = 0; j < wifi_view.ap_count; ++j) {
+          const ui_wifi_ap_t *shown = &wifi_view.aps[j];
+          if (shown->ssid_len == len && shown->open == open &&
+              memcmp(shown->ssid, records[i].ssid, len) == 0) { duplicate = true; break; }
+        }
+        if (duplicate) continue;
+        ui_wifi_ap_t *ap = &wifi_view.aps[wifi_view.ap_count++];
+        ap->ssid_len = len;
+        memcpy(ap->ssid, records[i].ssid, len);
+        ap->ssid[len] = 0;
+        ap->open = open;
+      }
     }
+    if (err != ESP_OK || !count) esp_wifi_clear_ap_list();
+    free(records);
+  } else {
+    esp_wifi_clear_ap_list();
   }
   scan_busy = false;
-  show_wifi_state(err != ESP_OK ? "Wi-Fi scan failed" : count ? "Choose a network" : "No networks found", false);
+  show_wifi_state(err != ESP_OK ? "Wi-Fi scan failed" : wifi_view.ap_count ? "Choose a network" : "No networks found", false);
 }
 
 static void handle_network_event(const net_event_t *event) {
