@@ -22,6 +22,7 @@
 #define HOT 0xFF6040
 
 LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk);
+LV_FONT_DECLARE(lv_font_wifi_16);
 
 static lv_obj_t *screens[4]; // app launcher, system, AI usage, Wi-Fi
 static lv_obj_t *status_label, *ai_offline_label, *cpu_label, *load_label, *memory_label, *details_label;
@@ -49,7 +50,7 @@ static lv_color_t color(uint32_t hex) { return lv_color_hex(hex); }
 
 static bool wifi_font_supports(uint32_t codepoint) {
     lv_font_glyph_dsc_t dsc;
-    return lv_font_get_glyph_dsc(&lv_font_source_han_sans_sc_16_cjk, &dsc, codepoint, 0);
+    return lv_font_get_glyph_dsc(&lv_font_wifi_16, &dsc, codepoint, 0);
 }
 
 static lv_obj_t *label(lv_obj_t *parent, const char *value, int x, int y,
@@ -233,7 +234,7 @@ static void create_wifi(void) {
     lv_obj_t *s = screens[3] = base_screen();
     add_home(s);
     label(s, "WI-FI", 80, 17, &lv_font_montserrat_24, TEXT);
-    wifi_current = label(s, "No Wi-Fi connection", 32, 75, &lv_font_source_han_sans_sc_16_cjk, TEXT);
+    wifi_current = label(s, "No Wi-Fi connection", 32, 75, &lv_font_wifi_16, TEXT);
     lv_obj_set_width(wifi_current, 560);
     wifi_message = label(s, "Choose a network", 32, 110, &lv_font_montserrat_12, DIM);
     lv_obj_set_width(wifi_message, 580);
@@ -245,40 +246,44 @@ static void create_wifi(void) {
 
     lv_obj_t *list = lv_obj_create(s);
     lv_obj_set_pos(list, 32, 150);
-    lv_obj_set_size(list, 752, 310);
+    lv_obj_set_size(list, 752, 288);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
     lv_obj_set_style_pad_all(list, 0, 0);
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     for (uintptr_t i = 0; i < UI_WIFI_MAX_APS; ++i) {
         wifi_rows[i] = card(list, 0, (int)i * 58, 728, 52);
+        lv_obj_set_style_pad_all(wifi_rows[i], 0, 0);
         lv_obj_add_event_cb(wifi_rows[i], on_wifi_row, LV_EVENT_CLICKED, (void *)(i + 1));
-        wifi_names[i] = label(wifi_rows[i], "", 16, 13, &lv_font_source_han_sans_sc_16_cjk, TEXT);
+        wifi_names[i] = label(wifi_rows[i], "", 0, 0, &lv_font_wifi_16, TEXT);
         lv_obj_set_width(wifi_names[i], 560);
-        wifi_security[i] = label(wifi_rows[i], "", 590, 17, &lv_font_montserrat_12, DIM);
+        lv_obj_align(wifi_names[i], LV_ALIGN_LEFT_MID, 16, 0);
+        wifi_security[i] = label(wifi_rows[i], "", 0, 0, &lv_font_montserrat_12, DIM);
+        lv_obj_align(wifi_security[i], LV_ALIGN_LEFT_MID, 590, 0);
         lv_obj_set_hidden(wifi_rows[i], true);
     }
 
-    wifi_password_panel = card(s, 30, 68, 740, 397);
+    wifi_password_panel = card(s, 16, 64, 768, 400);
     lv_obj_set_style_bg_color(wifi_password_panel, color(PANEL), 0);
-    wifi_password_title = label(wifi_password_panel, "Network", 18, 12, &lv_font_source_han_sans_sc_16_cjk, TEXT);
+    lv_obj_set_style_pad_all(wifi_password_panel, 0, 0);
+    wifi_password_title = label(wifi_password_panel, "Network", 24, 20, &lv_font_wifi_16, TEXT);
     wifi_password = lv_textarea_create(wifi_password_panel);
-    lv_obj_set_pos(wifi_password, 18, 43);
-    lv_obj_set_size(wifi_password, 704, 45);
+    lv_obj_set_pos(wifi_password, 24, 52);
+    lv_obj_set_size(wifi_password, 720, 46);
     lv_textarea_set_password_mode(wifi_password, true);
     lv_textarea_set_max_length(wifi_password, 64);
     lv_textarea_set_one_line(wifi_password, true);
     wifi_keyboard = lv_keyboard_create(wifi_password_panel);
-    lv_obj_set_pos(wifi_keyboard, 18, 100);
-    lv_obj_set_size(wifi_keyboard, 704, 236);
+    lv_obj_align(wifi_keyboard, LV_ALIGN_TOP_LEFT, 24, 110);
+    lv_obj_set_size(wifi_keyboard, 720, 230);
     lv_keyboard_set_textarea(wifi_keyboard, wifi_password);
     lv_obj_add_event_cb(wifi_keyboard, on_wifi_connect, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(wifi_keyboard, on_wifi_cancel, LV_EVENT_CANCEL, NULL);
-    lv_obj_t *cancel = card(wifi_password_panel, 370, 345, 158, 42);
+    lv_obj_t *cancel = card(wifi_password_panel, 392, 350, 158, 42);
     lv_obj_add_event_cb(cancel, on_wifi_cancel, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cancel_text = label(cancel, "CANCEL", 0, 0, &lv_font_montserrat_18, TEXT);
     lv_obj_center(cancel_text);
-    lv_obj_t *connect = card(wifi_password_panel, 546, 345, 176, 42);
+    lv_obj_t *connect = card(wifi_password_panel, 568, 350, 176, 42);
     lv_obj_set_style_bg_color(connect, color(BLUE), 0);
     lv_obj_add_event_cb(connect, on_wifi_connect, LV_EVENT_CLICKED, NULL);
     lv_obj_t *connect_text = label(connect, "CONNECT", 0, 0, &lv_font_montserrat_18, 0xFFFFFF);
