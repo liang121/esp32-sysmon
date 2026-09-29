@@ -431,6 +431,11 @@ static void console_task(void *arg) {
       else { nvs_close(h); printf("ERR unknown key\n"); continue; }
       nvs_commit(h); nvs_close(h);
       printf(e == ESP_OK ? "OK %s\n" : "ERR %s\n", k);
+    } else if (!strncmp(l, "tap ", 4)) {
+      int x, y; char extra;
+      if (sscanf(l, "tap %d %d %c", &x, &y, &extra) != 2 || !ui_debug_tap(x, y))
+        printf("ERR tap\n");
+      else printf("OK tap\n");
     } else if (!strcmp(l, "screenshot")) {
       uint8_t *pixels = NULL;
       size_t size = 0;

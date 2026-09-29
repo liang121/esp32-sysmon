@@ -72,6 +72,8 @@ node mac/screenshot.mjs /绝对路径/esp32-screen.png
 
 命令传输并校验当前 800×480 RGB565 画面；文件仅保存在本机，权限为仅当前用户可读写。若同时连接了多块 USB 串口设备，可把 `/dev/cu.usbmodemXXXX` 作为第二个参数。截图可能包含屏幕上已显示的敏感内容，不要提交到公开仓库。
 
+需要从 Mac 代替手指点击设备时，可运行 `node mac/configure.mjs tap 220 150`（坐标从左上角起，范围 x=0–799、y=0–479）。命令会等 LVGL 处理完点击再返回；随后可立即运行截屏命令。触屏本身仍可照常使用。
+
 浏览器状态页位于 `http://localhost:8787/`；需要登录时自动启动服务，可运行 `node mac/install-agent.mjs`。服务监听局域网地址，适合在可信网络内使用。Wi-Fi 密码和主机配置存于设备 NVS，不在仓库中；编译文件、闪存备份和凭据也未纳入版本控制。驱动与字体中包含 Waveshare、Espressif 和 STMicroelectronics 的代码，保留了原有版权声明；本仓库没有为这些第三方文件统一重新授权。
 
 Wi-Fi 页只显示网络名称与是否需要密码，不显示信号强弱。Monitor 保留原图标与操作。设备通过 `.local` 名称重新寻找 Mac；Mac 服务暂时不可用时会留在当前 Wi-Fi，不再因此切到另一个网络。Mac 与设备需要处在允许 mDNS 互通的网络中；即使 IP 在同一网段，不同 Wi-Fi 名称之间也可能屏蔽 mDNS。
@@ -131,6 +133,8 @@ node mac/screenshot.mjs /absolute/path/esp32-screen.png
 ```
 
 The command validates the current 800×480 RGB565 frame and saves a local PNG readable only by your user account. If multiple USB serial devices are connected, pass `/dev/cu.usbmodemXXXX` as the second argument. Screenshots may contain sensitive text visible on the screen; do not commit them to the public repository.
+
+To inject a USB-only tap from the Mac, run `node mac/configure.mjs tap 220 150` with x=0–799 and y=0–479 measured from the top-left corner. The command returns after LVGL processes the tap; a screenshot can follow immediately. Physical touch keeps working.
 
 The browser status page is at `http://localhost:8787/`. Run `node mac/install-agent.mjs` to start the server automatically at login. The server listens on the LAN; use it on a trusted network. Wi-Fi passwords and host settings live in device NVS, outside this repository. Build artifacts, flash backups, and credentials are also excluded. Display drivers and fonts include upstream work from Waveshare, Espressif, and STMicroelectronics with their original notices retained; this repository does not apply one blanket license to those third-party files.
 

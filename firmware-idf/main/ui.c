@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_lvgl_port.h"
 #include "gt911.h"
@@ -33,6 +34,10 @@ static lv_obj_t *wifi_current, *wifi_message, *wifi_rows[UI_WIFI_MAX_APS], *wifi
 static lv_obj_t *wifi_security[UI_WIFI_MAX_APS], *wifi_password_panel, *wifi_password, *wifi_keyboard;
 static lv_obj_t *wifi_password_title;
 static esp_lcd_panel_handle_t ui_panel;
+typedef struct { int16_t x, y; TaskHandle_t waiter; } debug_tap_t;
+static QueueHandle_t debug_taps;
+static debug_tap_t active_debug_tap;
+static bool debug_tap_pressed;
 static ui_wifi_view_t wifi_view;
 static QueueHandle_t wifi_requests;
 static uint8_t selected_ap;
@@ -417,6 +422,30 @@ static void read_touch(lv_indev_t *indev, lv_indev_data_t *data) {
     }
 }
 
+static void debug_tap_complete(void *waiter) {
+    xTaskNotifyGive((TaskHandle_t)waiter);
+}
+
+static void read_debug_touch(lv_indev_t *indev, lv_indev_data_t *data) {
+    if (debug_tap_pressed) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        data->point.x = active_debug_tap.x;
+        data->point.y = active_debug_tap.y;
+        debug_tap_pressed = false;
+        // Run after LVGL finishes processing this release event. The console
+        // can then take a screenshot without waiting an arbitrary interval.
+        if (lv_async_call(debug_tap_complete, active_debug_tap.waiter) != LV_RESULT_OK)
+            xTaskNotifyGive(active_debug_tap.waiter);
+    } else if (debug_taps && xQueueReceive(debug_taps, &active_debug_tap, 0) == pdPASS) {
+        data->state = LV_INDEV_STATE_PRESSED;
+        data->point.x = active_debug_tap.x;
+        data->point.y = active_debug_tap.y;
+        debug_tap_pressed = true;
+    } else {
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+}
+
 void ui_init(esp_lcd_panel_handle_t panel) {
     ui_panel = panel;
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -432,6 +461,8 @@ void ui_init(esp_lcd_panel_handle_t panel) {
     ESP_ERROR_CHECK(display ? ESP_OK : ESP_ERR_NO_MEM);
     wifi_requests = xQueueCreate(2, sizeof(ui_wifi_request_t));
     ESP_ERROR_CHECK(wifi_requests ? ESP_OK : ESP_ERR_NO_MEM);
+    debug_taps = xQueueCreate(2, sizeof(debug_tap_t));
+    ESP_ERROR_CHECK(debug_taps ? ESP_OK : ESP_ERR_NO_MEM);
     lvgl_port_lock(0);
     create_launcher();
     create_system();
@@ -441,8 +472,20 @@ void ui_init(esp_lcd_panel_handle_t panel) {
     lv_indev_set_type(input, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(input, read_touch);
     lv_indev_set_display(input, display);
+    lv_indev_t *debug_input = lv_indev_create();
+    lv_indev_set_type(debug_input, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(debug_input, read_debug_touch);
+    lv_indev_set_display(debug_input, display);
     enter(0);
     lvgl_port_unlock();
+}
+
+bool ui_debug_tap(int x, int y) {
+    if (x < 0 || x >= EXAMPLE_LCD_H_RES || y < 0 || y >= EXAMPLE_LCD_V_RES || !debug_taps) return false;
+    ulTaskNotifyTake(pdTRUE, 0);
+    const debug_tap_t tap = { .x = x, .y = y, .waiter = xTaskGetCurrentTaskHandle() };
+    return xQueueSend(debug_taps, &tap, 0) == pdPASS &&
+           ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) > 0;
 }
 
 bool ui_capture_rgb565(uint8_t **pixels, size_t *size) {

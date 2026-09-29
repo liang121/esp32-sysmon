@@ -69,7 +69,16 @@ function readScreenshot() {
 }
 
 try {
-  const frame = readScreenshot();
+  let frame;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      frame = readScreenshot();
+      break;
+    } catch (error) {
+      if (!error.message.includes('checksum') || attempt === 2) throw error;
+      console.error('Screenshot checksum mismatch; retrying capture');
+    }
+  }
   const png = rgb565ToPng(frame.raw, frame.width, frame.height);
   writeFileSync(output, png, { flag: 'wx', mode: 0o600 });
   console.log(`Saved ${frame.width}x${frame.height} screenshot: ${output}`);

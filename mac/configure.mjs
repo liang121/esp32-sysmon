@@ -2,6 +2,7 @@
 // Usage: node configure.mjs          (prompts; password input is hidden)
 //        node configure.mjs status   (just print device status)
 //        node configure.mjs host     (set this Mac's .local name without changing Wi-Fi)
+//        node configure.mjs tap x y  (inject a USB-only screen tap)
 import { execFileSync } from 'node:child_process';
 import { readdirSync, openSync, readSync, writeSync, closeSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -12,14 +13,14 @@ execFileSync('stty', ['-f', port, '115200', 'raw', '-echo', 'min', '0', 'time', 
 const fd = openSync(port, 'r+');
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-function send(line) {
+function send(line, timeoutMs = 1500) {
   writeSync(fd, line + '\n');
-  const buf = Buffer.alloc(4096); let out = ''; const until = Date.now() + 1500;
+  const buf = Buffer.alloc(4096); let out = ''; const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     let n = 0; try { n = readSync(fd, buf, 0, buf.length, null); } catch { n = 0; }
     if (n > 0) { out += buf.subarray(0, n).toString(); if (/^(OK|ERR|ssid=).*\r?\n/m.test(out)) break; } else sleep(50);
   }
-  return (out.match(/^(OK|ERR|ssid=).*$/m) || ['(no reply)'])[0];
+  return (out.match(/^(OK|ERR|ssid=).*$/m) || ['(no reply)'])[0].trim();
 }
 
 async function ask(q, { hidden = false, def = '' } = {}) {
@@ -31,6 +32,19 @@ async function ask(q, { hidden = false, def = '' } = {}) {
 }
 
 if (process.argv[2] === 'status') { console.log(send('status')); closeSync(fd); process.exit(0); }
+if (process.argv[2] === 'tap') {
+  const x = Number(process.argv[3]), y = Number(process.argv[4]);
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= 800 || y < 0 || y >= 480) {
+    closeSync(fd);
+    console.error('Usage: node mac/configure.mjs tap <x:0-799> <y:0-479>');
+    process.exit(1);
+  }
+  const result = send(`tap ${x} ${y}`, 3000);
+  closeSync(fd);
+  console.log(result);
+  if (result !== 'OK tap') process.exitCode = 1;
+  process.exit();
+}
 
 const host = execFileSync('scutil', ['--get', 'LocalHostName']).toString().trim() + '.local';
 if (process.argv[2] === 'host') {
